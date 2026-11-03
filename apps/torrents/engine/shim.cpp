@@ -16,6 +16,7 @@
 #include <libtorrent/session_stats.hpp>
 #include <libtorrent/settings_pack.hpp>
 #include <libtorrent/torrent_info.hpp>
+#include <libtorrent/version.hpp>
 #include <libtorrent/write_resume_data.hpp>
 
 #include <algorithm>
@@ -768,9 +769,17 @@ TorrentInfo parse_magnet(rust::Str uri) {
 rust::Vec<std::uint8_t> create_torrent(rust::Str path, rust::Vec<rust::String> const& trackers, bool private_torrent) {
     std::string p(path);
     while (p.size() > 1 && p.back() == '/') p.pop_back();
+#if LIBTORRENT_VERSION_NUM >= 20100
     auto files = lt::list_files(p);
     if (files.empty()) throw std::runtime_error("There's nothing to share at " + p);
     lt::create_torrent t(std::move(files));
+#else
+    // libtorrent 2.0 (NixOS, Debian): the file list goes through a file_storage.
+    lt::file_storage files;
+    lt::add_files(files, p);
+    if (files.num_files() == 0) throw std::runtime_error("There's nothing to share at " + p);
+    lt::create_torrent t(files);
+#endif
     int tier = 0;
     for (auto const& tr : trackers) t.add_tracker(std::string(tr), tier++);
     t.set_priv(private_torrent);
