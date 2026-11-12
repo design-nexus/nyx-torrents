@@ -111,12 +111,14 @@ fn nav_button(id: &str, title: &str, icon: &str, tooltip: &str, count: bool) -> 
     (button, readout, l)
 }
 
-fn group_heading(title: &str, add: Option<(&str, fn())>) -> (gtk::Box, gtk::Label) {
+/// `section`: the app's accent for the first group, else its name in the theme's [sections.torrents].
+fn group_heading(title: &str, section: &str, add: Option<(&str, fn())>) -> (gtk::Box, gtk::Label) {
     let row = widgets::hbox(4);
     row.add_css_class("nav-group-row");
     let g = widgets::label(&title.to_uppercase(), "nav-group");
     g.set_hexpand(true);
     row.append(&g);
+    nyx_ui::sidebar::set_section(&row, section);
     if let Some((tip, f)) = add {
         let b = gtk::Button::from_icon_name("list-add-symbolic");
         b.add_css_class("flat");
@@ -151,7 +153,7 @@ fn build(app: &gtk::Application) {
 
     // Transfers
     let transfers_box = widgets::vbox(0);
-    let (h, g) = group_heading("Transfers", None);
+    let (h, g) = group_heading("Transfers", nyx_ui::sidebar::ACCENT_SECTION, None);
     h.add_css_class("first");
     compact_hide.push(g.clone().upcast());
     transfers_box.append(&h);
@@ -178,7 +180,7 @@ fn build(app: &gtk::Application) {
     // Settings pages live in the settings dialog.
     for s in sections.iter().filter(|s| !s.group.is_empty() && s.group != settings_dialog::GROUP) {
         if s.group != last_group {
-            let (h, g) = group_heading(s.group, None);
+            let (h, g) = group_heading(s.group, &s.group.to_lowercase(), None);
             compact_hide.push(g.upcast());
             list.append(&h);
             last_group = s.group;
@@ -481,7 +483,7 @@ fn rebuild_lists() {
         u.nav_items.insert(id, b);
     };
 
-    let (h, g) = group_heading("Categories", Some(("New category", || actions::edit_category_dialog(None))));
+    let (h, g) = group_heading("Categories", "categories", Some(("New category", || actions::edit_category_dialog(None))));
     g.set_visible(!compact);
     h.set_visible(!compact);
     ui.borrow_mut().compact_hide.push(h.clone().upcast());
@@ -491,7 +493,7 @@ fn rebuild_lists() {
         add(&cbox, Filter::Category(Some(name.clone())), "folder-symbolic", true);
     }
 
-    let (h, g) = group_heading("Tags", Some(("New tag", actions::new_tag_dialog)));
+    let (h, g) = group_heading("Tags", "tags", Some(("New tag", actions::new_tag_dialog)));
     g.set_visible(!compact);
     h.set_visible(!compact);
     ui.borrow_mut().compact_hide.push(h.clone().upcast());
