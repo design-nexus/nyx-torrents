@@ -315,12 +315,6 @@ window.torrents-window dropdown.cell-choice > button {
 
 /* ---------- Details pane ---------- */
 
-/* Blended: the table and the details meet without a line (the divider still drags). */
-window.torrents-window paned.transfers-paned > separator {
-  min-height: 6px;
-  background: @theme_bg;
-}
-
 .details-pane {
   background: @theme_bg;
 }
