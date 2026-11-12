@@ -223,7 +223,7 @@ fn install_from_file() {
     filter.add_pattern("*.py");
     let filters = gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);
-    let dialog = gtk::FileDialog::builder().title("Install a search plugin").modal(true).filters(&filters).build();
+    let dialog = gtk::FileDialog::builder().title("Install a search plugin you trust").modal(true).filters(&filters).build();
     dialog.open(window::window().as_ref(), gio::Cancellable::NONE, |res| {
         let Ok(f) = res else { return };
         let Some(p) = f.path() else { return };
@@ -237,9 +237,13 @@ fn install_from_file() {
     });
 }
 
+/// Said wherever a plugin can be installed: a plugin is a program, not a list of sites.
+const WARNING: &str = "A plugin is a program: every search runs it with access to all your files. Install only plugins you trust.";
+
 fn install_from_url() {
     let (dialog, card) = widgets::dialog("Install from a link", 520);
-    card.append(&widgets::label("A link to a plugin's .py file, like the ones on qBittorrent's plugin wiki.", "dim"));
+    card.append(&widgets::label("A secure (https) link to a plugin's .py file, like the ones on qBittorrent's plugin wiki.", "dim"));
+    card.append(&widgets::label(WARNING, "dim"));
     let entry = gtk::Entry::new();
     entry.add_css_class("mono");
     entry.set_placeholder_text(Some("https://…/plugin.py"));
@@ -258,13 +262,24 @@ fn install_from_url() {
     ok.connect_clicked(move |_| {
         let url = entry.text().trim().to_string();
         d.close();
-        if !url.starts_with("http") {
-            window::toast("That isn't a web link.");
+        if !url.starts_with("https://") {
+            window::toast("Use a secure link (https://).");
             return;
         }
-        let tmp = std::env::temp_dir().join(url.rsplit('/').next().unwrap_or("plugin.py"));
+        // A folder of our own (0700), not a name anyone could predict in the shared /tmp.
+        let name = url.split(['?', '#']).next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
+        let name = if name.ends_with(".py") && !name.starts_with('.') { name } else { "plugin.py".to_string() };
+        let dir = gtk::glib::user_runtime_dir().join(format!("nyx-torrents-{}", std::process::id()));
+        let made = std::fs::create_dir_all(&dir)
+            .and_then(|_| std::fs::set_permissions(&dir, std::os::unix::fs::PermissionsExt::from_mode(0o700)));
+        if let Err(e) = made {
+            window::toast(&format!("Couldn't install it: {e}"));
+            return;
+        }
+        let tmp = dir.join(name);
         let tmp2 = tmp.clone();
-        cmd::run_async(&["curl", "-fsSL", "--max-time", "30", "-o", &tmp.to_string_lossy(), &url], move |res| {
+        let args = ["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "30", "-o", &tmp.to_string_lossy(), &url];
+        cmd::run_async(&args, move |res| {
             match res.map_err(|e| e.to_string()).and_then(|_| search::install_file(&tmp2)) {
                 Ok(id) => {
                     window::toast(&format!("Installed {id}."));
@@ -283,7 +298,10 @@ fn plugins_dialog() {
     let engines = st_rc.borrow().engines.clone();
     let (dialog, card) = widgets::dialog("Search plugins", 620);
     dialog.set_default_height(620);
-    let note = widgets::label("Plugins use qBittorrent's format. They live in ~/.local/share/torrents/search/engines.", "dim");
+    let note = widgets::label(
+        &format!("Plugins use qBittorrent's format. They live in ~/.local/share/torrents/search/engines. {WARNING}"),
+        "dim",
+    );
     note.set_wrap(true);
     card.append(&note);
     let list = widgets::vbox(6);
