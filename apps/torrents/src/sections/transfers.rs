@@ -2,6 +2,7 @@
 //! every update we refresh their data in place, work out visibility and order
 //! ourselves, and only poke GTK's filter/sorter when the order really changed,
 //! keeping the selection and scroll position. The details pane sits below.
+//! Home's "See all" links and the sidebar's filters lead here.
 
 use super::details;
 use crate::engine::{Command, Queue, Update};
@@ -559,8 +560,14 @@ pub fn selection() -> Vec<String> {
     state().map(|st| selected_ids(&st.borrow())).unwrap_or_default()
 }
 
+/// A torrent's row, from the list or (before the list is first shown) the latest update.
 pub fn row(id: &str) -> Option<Row> {
-    state().and_then(|st| st.borrow().by_id.get(id).map(|o| o.row().clone()))
+    if let Some(st) = state() {
+        return st.borrow().by_id.get(id).map(|o| o.row().clone());
+    }
+    let u = live::latest()?;
+    let s = u.torrents.iter().find(|t| t.id == id)?.clone();
+    Some(Row { s, meta: store::meta(id), visible: false, order: u32::MAX })
 }
 
 pub fn set_narrow(_narrow: bool) {
@@ -630,15 +637,6 @@ pub fn build(page: &Page) {
     // ----- Toolbar -----
     let toolbar = widgets::hbox(6);
     toolbar.add_css_class("toolbar");
-    let add = gtk::Button::new();
-    let add_content = widgets::hbox(6);
-    add_content.append(&gtk::Image::from_icon_name("list-add-symbolic"));
-    add_content.append(&gtk::Label::new(Some("Add")));
-    add.set_child(Some(&add_content));
-    add.add_css_class("suggested-action");
-    add.set_tooltip_text(Some("Add a .torrent file (Ctrl+O)"));
-    add.connect_clicked(|_| actions::open_torrent_files());
-    toolbar.append(&add);
     let magnet = tool_button("torrents-magnet-symbolic", "Add a magnet link (Ctrl+U)", || actions::add_magnet_dialog(""));
     toolbar.append(&magnet);
     toolbar.append(&gtk::Separator::new(gtk::Orientation::Vertical));

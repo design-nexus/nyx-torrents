@@ -293,6 +293,8 @@ pub fn show(source: Source) {
                     index: |f| prio_index(f.1.priority),
                     on_change,
                 }),
+                lead: None,
+                button: None,
             },
         ],
         "",

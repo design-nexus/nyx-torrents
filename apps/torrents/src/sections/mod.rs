@@ -1,5 +1,5 @@
-//! Every page, in sidebar order. Transfers has no nav item of its own: the
-//! transfer, category and tag filters all lead to it.
+//! Every page. Home and Search head the sidebar; Transfers has no nav item of its
+//! own: the transfer, category and tag filters all lead to it.
 
 use crate::paths;
 use crate::widgets::Page;
@@ -10,6 +10,7 @@ pub mod bittorrent;
 pub mod connection;
 pub mod details;
 pub mod downloads;
+pub mod home;
 pub mod search;
 pub mod speed;
 pub mod transfers;
@@ -41,6 +42,17 @@ fn download_files() -> Vec<PathBuf> {
 pub fn all() -> Vec<Section> {
     vec![
         Section {
+            id: "home",
+            title: "Home",
+            icon: "go-home-symbolic",
+            group: "",
+            description: "Speeds, what's downloading and the connection's health.",
+            keywords: "",
+            files: Vec::new,
+            build: home::build,
+            fill: false,
+        },
+        Section {
             id: "transfers",
             title: "Transfers",
             icon: "view-list-symbolic",
@@ -55,8 +67,8 @@ pub fn all() -> Vec<Section> {
             id: "search",
             title: "Search",
             icon: "system-search-symbolic",
-            group: "Discover",
-            description: "Find torrents with qBittorrent search plugins.",
+            group: "",
+            description: "Find torrents on the search sites (qBittorrent search plugins).",
             keywords: "find plugins engines nova",
             files: Vec::new,
             build: search::build,

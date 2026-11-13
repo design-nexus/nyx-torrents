@@ -1,8 +1,9 @@
-//! Search: query every enabled plugin at once and list what they find. Double-click
-//! a result to add it. Plugins are managed in a dialog from the toolbar.
+//! Search: query every enabled site (a qBittorrent search plugin) at once and list
+//! what they find. The sites sit under the query as chips that switch them on and
+//! off; Add (or a double-click) adds a result. Plugins are managed in a dialog.
 
 use crate::search::{self, Engine, Hit, Message};
-use crate::table::{Column, Table};
+use crate::table::{Column, Lead, Table};
 use crate::widgets::{self, Page};
 use crate::{actions, cmd, fmt, paths, prefs, window};
 use gtk::prelude::*;
@@ -16,10 +17,18 @@ struct State {
     filter: String,
     table: Rc<Table<Hit>>,
     status: gtk::Label,
+    hint: gtk::Label,
     button: gtk::Button,
     running: bool,
     banner: gtk::Box,
+    sites: gtk::FlowBox,
+    sites_label: gtk::Label,
+    category: gtk::DropDown,
     dirty: bool,
+    /// The site list has been read (it's read off the UI thread).
+    loaded: bool,
+    /// A search asked for before the site list was read.
+    pending: bool,
 }
 
 thread_local! {
@@ -32,15 +41,51 @@ fn state() -> Option<Rc<RefCell<State>>> {
     STATE.with(|s| s.borrow().clone())
 }
 
-fn date(ts: i64) -> String {
+/// How long ago a result was published: "today", "2 days ago", "3 months ago".
+fn ago(ts: i64) -> String {
     if ts <= 0 {
-        return String::new();
+        return "–".into();
     }
-    glib::DateTime::from_unix_local(ts).ok().and_then(|d| d.format("%Y-%m-%d").ok()).map(|s| s.to_string()).unwrap_or_default()
+    let now = glib::real_time() / 1_000_000;
+    let days = (now - ts).max(0) / 86_400;
+    let plural = |n: i64, unit: &str| format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" });
+    match days {
+        0 => "today".into(),
+        1 => "yesterday".into(),
+        2..=13 => plural(days, "day"),
+        14..=59 => plural(days / 7, "week"),
+        60..=364 => plural(days / 30, "month"),
+        _ => plural(days / 365, "year"),
+    }
 }
 
+/// The dot beside a result's seeds: how well seeded it is.
+fn seed_class(h: &Hit) -> &'static str {
+    match h.seeds {
+        501.. => "seed-hi",
+        151..=500 => "seed-mid",
+        _ => "seed-low",
+    }
+}
+
+fn plural(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+}
+
+/// 1840 as "1,840".
 fn num(v: i64) -> String {
-    if v < 0 { "–".into() } else { v.to_string() }
+    if v < 0 {
+        return "–".into();
+    }
+    let digits = v.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn show_hits(st: &State) {
@@ -113,7 +158,7 @@ fn start(query: &str, category: &str) {
     let Some(st_rc) = state() else { return };
     let engines: Vec<Engine> = st_rc.borrow().engines.iter().filter(|e| search::enabled(e)).cloned().collect();
     if engines.is_empty() {
-        window::toast("Turn on at least one search plugin first.");
+        window::toast("Turn on at least one search site first.");
         return;
     }
     if query.trim().is_empty() {
@@ -125,7 +170,8 @@ fn start(query: &str, category: &str) {
         st.running = true;
         st.button.set_label("Stop");
         st.button.remove_css_class("suggested-action");
-        st.status.set_text(&format!("Searching {} plugins…", engines.len()));
+        st.status.set_text(&format!("Searching {}…", plural(engines.len(), "site")));
+        st.hint.set_visible(false);
         st.table.set_empty_text("Searching…");
         show_hits(&st);
     }
@@ -178,13 +224,14 @@ fn start(query: &str, category: &str) {
             let mut text = format!("{n} result{}", if n == 1 { "" } else { "s" });
             let failed = failures.borrow();
             if !failed.is_empty() {
-                text.push_str(&format!(" · {} plugin{} failed", failed.len(), if failed.len() == 1 { "" } else { "s" }));
+                text.push_str(&format!(" · {} failed", plural(failed.len(), "site")));
                 st.status.set_tooltip_text(Some(&failed.join("\n")));
             } else {
                 st.status.set_tooltip_text(None);
             }
             st.status.set_text(&text);
-            st.table.set_empty_text("Nothing found. Try other words, or turn on more plugins.");
+            update_hint(&st);
+            st.table.set_empty_text("Nothing found. Try other words, or turn on more sites.");
         },
     );
 }
@@ -192,19 +239,86 @@ fn start(query: &str, category: &str) {
 fn reload_engines() {
     cmd::background(search::load_engines, |engines| {
         let Some(st_rc) = state() else { return };
-        let mut st = st_rc.borrow_mut();
-        st.engines = engines;
-        let none = st.engines.is_empty();
-        st.banner.set_visible(none || !search::python());
-        let enabled = st.engines.iter().filter(|e| search::enabled(e)).count();
-        if !st.running {
-            st.status.set_text(&if none {
-                "No plugins installed".to_string()
-            } else {
-                format!("{enabled} of {} plugins on", st.engines.len())
-            });
+        let pending = {
+            let mut st = st_rc.borrow_mut();
+            st.engines = engines;
+            st.loaded = true;
+            std::mem::take(&mut st.pending)
+        };
+        show_sites(&st_rc.borrow());
+        if pending {
+            run_entry();
         }
     });
+}
+
+/// "Most seeds first" while the results are in that order.
+fn update_hint(st: &State) {
+    let by_seeds = st
+        .table
+        .view
+        .sorter()
+        .and_downcast::<gtk::ColumnViewSorter>()
+        .and_then(|s| Some((s.primary_sort_column()?.title()?.to_string(), s.primary_sort_order())))
+        .is_some_and(|(title, order)| title == "Seeds" && order == gtk::SortType::Descending);
+    st.hint.set_visible(by_seeds && !st.hits.is_empty() && !st.running);
+}
+
+/// The sites as chips: on ones carry a check; a click switches one on or off.
+fn show_sites(st: &State) {
+    let none = st.engines.is_empty();
+    st.banner.set_visible(none || !search::python());
+    while let Some(c) = st.sites.first_child() {
+        st.sites.remove(&c);
+    }
+    for e in &st.engines {
+        let on = search::enabled(e);
+        let chip = gtk::Button::new();
+        chip.add_css_class("chip");
+        chip.add_css_class("site-chip");
+        let content = widgets::hbox(5);
+        if on {
+            chip.add_css_class("selected");
+            content.append(&gtk::Image::from_icon_name("object-select-symbolic"));
+        }
+        content.append(&gtk::Label::new(Some(&e.name)));
+        chip.set_child(Some(&content));
+        if !e.error.is_empty() {
+            chip.set_sensitive(false);
+            chip.set_tooltip_text(Some(&format!("Broken: {}", e.error)));
+        } else {
+            chip.set_tooltip_text(Some(&format!("{} ({})", if on { "Searched" } else { "Not searched" }, e.url)));
+        }
+        let id = e.id.clone();
+        chip.connect_clicked(move |_| {
+            let id = id.clone();
+            prefs::update(move |p| {
+                if !p.disabled_engines.contains(&id) {
+                    p.disabled_engines.push(id);
+                } else {
+                    p.disabled_engines.retain(|x| *x != id);
+                }
+            });
+            if let Some(st) = state() {
+                show_sites(&st.borrow());
+            }
+        });
+        st.sites.append(&chip);
+    }
+    let mut child = st.sites.first_child();
+    while let Some(c) = child {
+        c.set_focusable(false);
+        child = c.next_sibling();
+    }
+    let enabled = st.engines.iter().filter(|e| search::enabled(e)).count();
+    st.sites_label.set_text(&if none {
+        "No search sites yet.".to_string()
+    } else {
+        format!("Searching {enabled} of {}:", plural(st.engines.len(), "site"))
+    });
+    if !st.running && st.hits.is_empty() {
+        st.status.set_text(if none { "Add a search site to start" } else { "" });
+    }
 }
 
 fn import_qbittorrent() {
@@ -296,10 +410,10 @@ fn install_from_url() {
 fn plugins_dialog() {
     let Some(st_rc) = state() else { return };
     let engines = st_rc.borrow().engines.clone();
-    let (dialog, card) = widgets::dialog("Search plugins", 620);
+    let (dialog, card) = widgets::dialog("Search sites", 620);
     dialog.set_default_height(620);
     let note = widgets::label(
-        &format!("Plugins use qBittorrent's format. They live in ~/.local/share/torrents/search/engines. {WARNING}"),
+        &format!("Each site is a qBittorrent search plugin. They live in ~/.local/share/torrents/search/engines. {WARNING}"),
         "dim",
     );
     note.set_wrap(true);
@@ -349,7 +463,7 @@ fn plugins_dialog() {
         list.append(&r);
     }
     if engines.is_empty() {
-        list.append(&widgets::label("No plugins yet.", "empty-state"));
+        list.append(&widgets::label("No sites yet.", "empty-state"));
     }
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -398,9 +512,9 @@ pub fn build(page: &Page) {
 
     let banner = widgets::banner(
         if search::python() {
-            "No search plugins yet. Import the ones qBittorrent has, or install one from a file or link."
+            "No search sites yet. Import the plugins qBittorrent has, or install one from a file or link."
         } else {
-            "Search plugins need <b>python3</b>, which isn't installed. Install it with <tt>sudo pacman -S python</tt>."
+            "Search sites need <b>python3</b>, which isn't installed. Install it with <tt>sudo pacman -S python</tt>."
         },
         !search::python(),
     );
@@ -410,79 +524,131 @@ pub fn build(page: &Page) {
         b.set_sensitive(paths::qbittorrent_engines().is_dir());
         b.connect_clicked(|_| import_qbittorrent());
         banner.append(&b);
-        let b = gtk::Button::with_label("Plugins…");
+        let b = gtk::Button::with_label("Manage sites…");
         b.set_valign(gtk::Align::Center);
         b.connect_clicked(|_| plugins_dialog());
         banner.append(&b);
     }
     banner.set_visible(false);
+    banner.add_css_class("search-banner");
     page.body.append(&banner);
 
-    let toolbar = widgets::hbox(8);
-    toolbar.add_css_class("toolbar");
+    let query = widgets::hbox(8);
+    query.add_css_class("search-query");
     let entry = gtk::SearchEntry::new();
-    entry.set_placeholder_text(Some("Search for torrents"));
+    entry.set_placeholder_text(Some("Search the sites for torrents"));
+    entry.add_css_class("big-search");
     entry.set_hexpand(true);
     entry.set_width_chars(8);
-    toolbar.append(&entry);
+    query.append(&entry);
     QUERY.with(|q| *q.borrow_mut() = Some(entry.clone()));
     let cats: Vec<&str> = search::CATEGORIES.iter().map(|c| c.1).collect();
     let category = gtk::DropDown::from_strings(&cats);
+    category.set_valign(gtk::Align::Center);
     let current = prefs::get().search_category;
     category.set_selected(search::CATEGORIES.iter().position(|c| c.0 == current).unwrap_or(0) as u32);
     category.connect_selected_notify(|d| {
         let id = search::CATEGORIES.get(d.selected() as usize).map(|c| c.0).unwrap_or("all");
         prefs::update(|p| p.search_category = id.to_string());
     });
-    toolbar.append(&category);
+    query.append(&category);
     let go = gtk::Button::with_label("Search");
     go.add_css_class("suggested-action");
-    toolbar.append(&go);
-    let plugins = gtk::Button::from_icon_name("application-x-addon-symbolic");
-    plugins.set_tooltip_text(Some("Search plugins"));
-    plugins.connect_clicked(|_| plugins_dialog());
-    toolbar.append(&plugins);
-    page.body.append(&toolbar);
+    go.set_valign(gtk::Align::Center);
+    query.append(&go);
+    page.body.append(&query);
 
-    let sub = widgets::hbox(8);
-    sub.add_css_class("search-sub");
-    let status = widgets::label("", "dim");
-    status.set_hexpand(true);
+    let sites_row = widgets::hbox(8);
+    sites_row.add_css_class("search-sites");
+    let puzzle = gtk::Image::from_icon_name("application-x-addon-symbolic");
+    puzzle.set_valign(gtk::Align::Center);
+    sites_row.append(&puzzle);
+    let sites_label = widgets::label("", "search-sites-label");
+    sites_label.set_valign(gtk::Align::Center);
+    sites_row.append(&sites_label);
+    let sites = gtk::FlowBox::new();
+    sites.set_selection_mode(gtk::SelectionMode::None);
+    sites.set_hexpand(true);
+    sites.set_valign(gtk::Align::Center);
+    sites.set_min_children_per_line(1);
+    sites.set_max_children_per_line(24);
+    sites.set_row_spacing(6);
+    sites.set_column_spacing(6);
+    sites_row.append(&sites);
+    let manage = gtk::Button::with_label("Manage sites…");
+    manage.add_css_class("flat");
+    manage.add_css_class("link-button");
+    manage.set_valign(gtk::Align::Center);
+    manage.connect_clicked(|_| plugins_dialog());
+    sites_row.append(&manage);
+    page.body.append(&sites_row);
+
+    let head = widgets::hbox(10);
+    head.add_css_class("results-head");
+    let status = widgets::label("", "results-count");
+    head.append(&status);
+    let hint = widgets::label("Most seeds first", "results-hint");
+    hint.set_visible(false);
+    hint.set_hexpand(true);
+    head.append(&hint);
+    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    head.append(&spacer);
     let filter = gtk::SearchEntry::new();
     filter.set_placeholder_text(Some("Filter results"));
+    filter.add_css_class("results-filter");
     filter.set_width_chars(16);
-    sub.append(&status);
-    sub.append(&filter);
-    page.body.append(&sub);
+    head.append(&filter);
+    page.body.append(&head);
 
+    let on_add: crate::table::OnClick = Rc::new(|key: &str| {
+        let hit = state().and_then(|st| st.borrow().hits.iter().find(|h| format!("{}|{}", h.engine_id, h.link) == key).cloned());
+        if let Some(h) = hit {
+            add_hit(h);
+        }
+    });
     let table = Rc::new(Table::new(
         vec![
-            Column::text("Name", 0, |h: &Hit| h.name.clone()).sorted(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            Column::text("Name", 0, |h: &Hit| h.name.clone())
+                .sorted(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                .lead(Lead::Tile(|h: &Hit| h.name.clone())),
             Column::num(
                 "Size",
                 90,
                 |h| if h.size < 0 { "–".into() } else { fmt::bytes(h.size as f64) },
                 |a, b| a.size.cmp(&b.size),
             ),
-            Column::num("Seeds", 70, |h| num(h.seeds), |a, b| a.seeds.cmp(&b.seeds)),
-            Column::num("Leechers", 80, |h| num(h.leech), |a, b| a.leech.cmp(&b.leech)),
-            Column::text("Plugin", 120, |h: &Hit| h.engine.clone()).sorted(|a, b| a.engine.cmp(&b.engine)),
-            Column::num("Published", 110, |h| date(h.pub_date), |a, b| a.pub_date.cmp(&b.pub_date)),
+            Column::num("Seeds", 84, |h: &Hit| num(h.seeds), |a, b| a.seeds.cmp(&b.seeds)).lead(Lead::Dot(seed_class)),
+            Column::num("Leechers", 84, |h| num(h.leech), |a, b| a.leech.cmp(&b.leech)),
+            Column::text("Site", 120, |h: &Hit| h.engine.clone()).sorted(|a, b| a.engine.cmp(&b.engine)),
+            Column::text("Published", 116, |h: &Hit| ago(h.pub_date)).sorted(|a, b| a.pub_date.cmp(&b.pub_date)),
+            Column::button(56, "folder-download-symbolic", "Add", on_add),
         ],
         "Type what you're looking for and press Enter.",
     ));
+    table.view.add_css_class("results-table");
+    // Names stay readable: at 800 px only Size and Seeds keep them company.
+    table.set_room(440);
     // Most seeds first.
     if let Some(seeds) = table.view.columns().item(2).and_downcast::<gtk::ColumnViewColumn>() {
         table.view.sort_by_column(Some(&seeds), gtk::SortType::Descending);
     }
+    if let Some(sorter) = table.view.sorter() {
+        // Also fires while the table is refilled under a borrow of the state.
+        sorter.connect_changed(|_, _| {
+            glib::idle_add_local_once(|| {
+                if let Some(st) = state()
+                    && let Ok(st) = st.try_borrow()
+                {
+                    update_hint(&st);
+                }
+            });
+        });
+    }
     table.on_activate(add_hit);
     table.on_secondary(hit_menu);
-    let card = widgets::vbox(0);
-    card.add_css_class("table-card");
-    card.set_overflow(gtk::Overflow::Hidden);
-    card.append(&table.root);
-    card.set_vexpand(true);
-    page.body.append(&card);
+    table.root.set_vexpand(true);
+    page.body.append(&table.root);
 
     let st = State {
         engines: Vec::new(),
@@ -490,27 +656,22 @@ pub fn build(page: &Page) {
         filter: String::new(),
         table,
         status,
+        hint,
         button: go.clone(),
         running: false,
         banner,
+        sites,
+        sites_label,
+        category: category.clone(),
         dirty: false,
+        loaded: false,
+        pending: false,
     };
     STATE.with(|s| *s.borrow_mut() = Some(Rc::new(RefCell::new(st))));
 
-    let run = {
-        let (entry, category) = (entry.clone(), category.clone());
-        move || {
-            if state().is_some_and(|s| s.borrow().running) {
-                search::stop();
-                return;
-            }
-            let cat = search::CATEGORIES.get(category.selected() as usize).map(|c| c.0).unwrap_or("all");
-            start(&entry.text(), cat);
-        }
-    };
-    let r2 = run.clone();
+    let r2 = run_entry;
     go.connect_clicked(move |_| r2());
-    entry.connect_activate(move |_| run());
+    entry.connect_activate(move |_| run_entry());
     filter.connect_search_changed(|e| {
         if let Some(st) = state() {
             st.borrow_mut().filter = e.text().to_string();
@@ -520,6 +681,38 @@ pub fn build(page: &Page) {
     reload_engines();
 }
 
+/// Search for what's in the field, or stop the search that's running.
+fn run_entry() {
+    let Some(st) = state() else { return };
+    if st.borrow().running {
+        search::stop();
+        return;
+    }
+    if !st.borrow().loaded {
+        st.borrow_mut().pending = true;
+        return;
+    }
+    let cat = search::CATEGORIES.get(st.borrow().category.selected() as usize).map(|c| c.0).unwrap_or("all");
+    start(&query(), cat);
+}
+
+/// What's in the search field.
+pub fn query() -> String {
+    QUERY.with(|q| q.borrow().as_ref().map(|e| e.text().trim().to_string()).unwrap_or_default())
+}
+
+/// Put `text` in the search field and search for it (a saved search).
+pub fn run_query(text: &str) {
+    QUERY.with(|q| {
+        if let Some(e) = q.borrow().as_ref() {
+            e.set_text(text);
+        }
+    });
+    if state().is_some_and(|s| !s.borrow().running) {
+        run_entry();
+    }
+}
+
 /// Put the cursor in the search field.
 pub fn focus_query() {
     QUERY.with(|q| {
@@ -527,4 +720,20 @@ pub fn focus_query() {
             e.grab_focus();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_numbers_and_dates_plainly() {
+        assert_eq!(num(1840), "1,840");
+        assert_eq!(num(1_234_567), "1,234,567");
+        assert_eq!(num(7), "7");
+        assert_eq!(num(-1), "–");
+        let now = glib::real_time() / 1_000_000;
+        assert_eq!(ago(now - 2 * 86_400), "2 days ago");
+        assert_eq!(ago(now - 42 * 86_400), "6 weeks ago");
+    }
 }

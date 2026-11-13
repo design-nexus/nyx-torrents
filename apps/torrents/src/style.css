@@ -5,10 +5,63 @@
 
 /* ---------- Header ---------- */
 
-.header-status {
-  font-size: 11.5px;
+/* The middle: a field-like button that goes to Search. */
+window.torrents-window .app-header button.header-find {
+  min-width: 256px;
+  min-height: 30px;
+  padding: 0 6px 0 10px;
+  background: @field;
+  color: @theme_text_tertiary;
+}
+
+window.torrents-window .app-header button.header-find:hover {
+  background: @row_hover;
+}
+
+.header-find image {
+  -gtk-icon-size: 14px;
+}
+
+.header-find-text {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: @theme_text_tertiary;
+}
+
+.key-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: @theme_text_tertiary;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: alpha(@theme_text, 0.05);
+}
+
+.header-rate {
+  font-size: 12px;
   color: @theme_dim_text;
   font-feature-settings: "tnum";
+}
+
+.header-rate image {
+  -gtk-icon-size: 13px;
+}
+
+.header-rate .rate-gap {
+  min-width: 10px;
+}
+
+window.torrents-window .app-header button.header-add {
+  min-height: 30px;
+  padding: 0 6px 0 10px;
+  margin: 0 4px;
+  border-color: alpha(@theme_text, 0.1);
+  background: @field;
+  font-weight: 600;
+}
+
+window.torrents-window .app-header button.header-add:hover {
+  background: @row_hover;
 }
 
 window.torrents-window .app-header button.bar-button,
@@ -87,6 +140,23 @@ window.torrents-window button.nav-add {
 window.torrents-window button.nav-add:hover {
   background: @row_hover;
   color: @theme_text;
+}
+
+/* A category's colour. */
+.settings-navigation .nav-dot {
+  min-width: 10px;
+  min-height: 10px;
+  margin: 0 3px;
+  border-radius: 999px;
+  background-color: currentColor;
+}
+
+/* The icon rail's mark where a group starts: a short bar in its colour. */
+.settings-navigation separator.nav-divider {
+  margin: 8px 14px 6px;
+  min-height: 2px;
+  border-radius: 1px;
+  background: @theme_divider;
 }
 
 /* The icon-only sidebar hides these labels itself. The shared sheet's font-size: 0
@@ -374,4 +444,284 @@ window.torrents-window textview.code-block {
   border: none;
   border-radius: var(--nyx-radius-small);
   background: @theme_card;
+}
+
+/* ---------- File tiles ---------- */
+
+/* A rounded square in the kind's swatch (its colour is the swatch) with a white icon. */
+.file-tile {
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: 7px;
+  background-color: currentColor;
+}
+
+.file-tile image {
+  color: #ffffff;
+  -gtk-icon-size: 15px;
+}
+
+/* ---------- Home ---------- */
+
+.home {
+  padding: 4px 4px 8px;
+}
+
+.home-hello {
+  margin-bottom: 16px;
+}
+
+.home-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.stat-grid {
+  margin-bottom: 12px;
+}
+
+.stat-grid > flowboxchild {
+  padding: 0;
+}
+
+.stat-card {
+  padding: 10px 14px 12px;
+}
+
+.stat-key {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: @theme_dim_text;
+}
+
+.stat-key image {
+  -gtk-icon-size: 13px;
+}
+
+.stat-value {
+  margin-top: 4px;
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.stat-sub {
+  font-size: 11.5px;
+  color: @theme_dim_text;
+}
+
+.speed-card {
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.home-card-title,
+.home-head-title {
+  font-weight: 600;
+}
+
+.speed-legend {
+  font-size: 12px;
+  color: @theme_dim_text;
+}
+
+.legend-dot {
+  min-width: 8px;
+  min-height: 8px;
+  margin-left: 6px;
+  border-radius: 2px;
+}
+
+.legend-dot.down { background: @theme_app_accent; }
+
+.legend-dot.up { background: @theme_success; }
+
+.home-two {
+  margin-bottom: 14px;
+}
+
+.home-head {
+  min-height: 26px;
+  margin: 0 2px 8px;
+}
+
+window.torrents-window button.link-button {
+  min-height: 24px;
+  padding: 0 6px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: @theme_accent;
+}
+
+window.torrents-window button.link-button:hover {
+  background: @row_hover;
+}
+
+.mini-card {
+  padding: 10px 12px;
+}
+
+.mini-card .file-tile {
+  min-width: 28px;
+  min-height: 28px;
+}
+
+.mini-name {
+  font-weight: 500;
+}
+
+.mini-line {
+  font-size: 11.5px;
+  color: @theme_dim_text;
+}
+
+.conn-row {
+  min-height: 40px;
+  padding: 0 12px;
+}
+
+.conn-icon {
+  -gtk-icon-size: 15px;
+  color: @theme_dim_text;
+}
+
+.conn-value {
+  font-size: 12px;
+  color: @theme_dim_text;
+}
+
+.conn-value.ok {
+  color: @theme_success;
+  font-weight: 600;
+}
+
+.conn-value.bad {
+  color: @theme_danger;
+  font-weight: 600;
+}
+
+.conn-value.accent {
+  color: @theme_accent;
+  font-weight: 600;
+}
+
+separator.row-line {
+  min-height: 1px;
+  margin-left: 38px;
+  background: @theme_divider;
+}
+
+separator.row-line.tile-inset {
+  margin-left: 50px;
+}
+
+.finished-row {
+  min-height: 46px;
+  padding: 0 10px 0 12px;
+}
+
+.finished-meta {
+  font-size: 12px;
+  color: @theme_dim_text;
+}
+
+window.torrents-window button.small-button {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.home-empty {
+  padding: 14px 16px;
+}
+
+/* ---------- Search ---------- */
+
+.search-banner {
+  margin: 12px 18px 0;
+}
+
+.search-query {
+  padding: 16px 18px 10px;
+}
+
+window.torrents-window searchentry.big-search {
+  min-height: 36px;
+  font-size: 14px;
+}
+
+window.torrents-window .search-query dropdown > button,
+window.torrents-window .search-query > button {
+  min-height: 34px;
+}
+
+.search-sites {
+  padding: 0 18px 12px;
+  border-bottom: 1px solid @theme_divider;
+  font-size: 12px;
+  color: @theme_dim_text;
+}
+
+.search-sites image {
+  -gtk-icon-size: 15px;
+}
+
+.search-sites flowboxchild {
+  padding: 0;
+}
+
+window.torrents-window button.site-chip {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: @theme_dim_text;
+}
+
+window.torrents-window button.site-chip.selected {
+  box-shadow: inset 0 0 0 1px alpha(@theme_accent, 0.45);
+  color: @theme_text;
+}
+
+window.torrents-window button.site-chip.selected image {
+  -gtk-icon-size: 12px;
+  color: @theme_accent;
+}
+
+.results-head {
+  padding: 10px 14px 8px 18px;
+}
+
+.results-count {
+  font-weight: 600;
+}
+
+.results-hint {
+  color: @theme_text_tertiary;
+}
+
+window.torrents-window searchentry.results-filter {
+  min-height: 28px;
+}
+
+.cell-dot {
+  min-width: 7px;
+  min-height: 7px;
+  border-radius: 999px;
+  background: @theme_text_tertiary;
+}
+
+.cell-dot.seed-mid { background: @theme_warning; }
+
+.cell-dot.seed-hi { background: @theme_success; }
+
+window.torrents-window columnview.results-table > listview > row {
+  min-height: 42px;
+}
+
+window.torrents-window columnview.results-table > listview > row:hover button.cell-button {
+  background: @theme_accent;
+  color: @theme_on_accent;
 }

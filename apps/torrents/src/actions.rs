@@ -419,6 +419,16 @@ pub fn open_folder(id: &str) {
     cmd::spawn(&["xdg-open", &target.to_string_lossy()]);
 }
 
+/// Open what a torrent downloaded: its folder, or its one file in the default app.
+pub fn open_content(id: &str) {
+    let Some(content) = content_path(id) else { return };
+    if !content.exists() {
+        window::toast("The downloaded files aren't there any more.");
+        return;
+    }
+    cmd::spawn(&["xdg-open", &content.to_string_lossy()]);
+}
+
 fn magnet_for(id: &str) -> String {
     if let Some(d) = live::latest().and_then(|u| u.details.clone()).filter(|d| d.id == id)
         && !d.magnet.is_empty()
@@ -829,7 +839,7 @@ pub fn context_menu(widget: &impl IsA<gtk::Widget>, x: f64, y: f64, ids: Vec<Str
     popup(widget, x, y, &menu, &group);
 }
 
-fn popup(widget: &impl IsA<gtk::Widget>, x: f64, y: f64, menu: &gio::Menu, group: &gio::SimpleActionGroup) {
+pub fn popup(widget: &impl IsA<gtk::Widget>, x: f64, y: f64, menu: &gio::Menu, group: &gio::SimpleActionGroup) {
     let widget = widget.upcast_ref::<gtk::Widget>();
     widget.insert_action_group("tr", Some(group));
     let pop = gtk::PopoverMenu::from_model(Some(menu));

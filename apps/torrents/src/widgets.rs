@@ -302,6 +302,70 @@ pub fn segmented_row(
     row(title, desc, Some(seg.upcast_ref()))
 }
 
+// ---------- File tiles ----------
+
+/// What a torrent most likely holds, going by its name: an icon and the swatch its
+/// tile is painted in.
+pub fn file_kind(name: &str) -> (&'static str, &'static str) {
+    const DISC: (&str, &str) = ("media-optical-symbolic", "blue");
+    const FILM: (&str, &str) = ("video-x-generic-symbolic", "coral");
+    const AUDIO: (&str, &str) = ("audio-x-generic-symbolic", "teal");
+    const BOOK: (&str, &str) = ("text-x-generic-symbolic", "amber");
+    let lower = name.to_lowercase();
+    let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    match ext {
+        "iso" | "img" | "dmg" | "qcow2" => return DISC,
+        "mkv" | "mp4" | "avi" | "mov" | "webm" | "m4v" => return FILM,
+        "mp3" | "flac" | "ogg" | "opus" | "m4a" | "m4b" | "wav" => return AUDIO,
+        "epub" | "pdf" | "mobi" | "azw3" | "cbz" | "cbr" => return BOOK,
+        _ => {}
+    }
+    let has = |words: &[&str]| words.iter().any(|w| lower.contains(w));
+    if has(&["1080p", "720p", "2160p", "bluray", "blu-ray", "webrip", "web-dl", "hdtv", "x264", "x265", "hevc", "dvdrip"]) {
+        FILM
+    } else if has(&["audiobook", "librivox", "flac", "mp3", "discography"]) {
+        AUDIO
+    } else if has(&["epub", "ebook"]) {
+        BOOK
+    } else if has(&["amd64", "x86_64", "arm64", "aarch64", "i386", "linux", "-dvd-", "netinst"]) {
+        DISC
+    } else {
+        ("package-x-generic-symbolic", "violet")
+    }
+}
+
+/// A rounded tile in a swatch with the kind's icon in white.
+pub fn file_tile(name: &str) -> gtk::Box {
+    let tile = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    tile.add_css_class("file-tile");
+    tile.set_valign(gtk::Align::Center);
+    tile.set_hexpand(false);
+    let image = gtk::Image::new();
+    image.set_halign(gtk::Align::Center);
+    image.set_valign(gtk::Align::Center);
+    tile.append(&image);
+    tile.set_halign(gtk::Align::Start);
+    set_file_tile(tile.upcast_ref(), name);
+    tile
+}
+
+pub fn set_file_tile(tile: &gtk::Widget, name: &str) {
+    let (icon, swatch) = file_kind(name);
+    let class = format!("section-swatch-{swatch}");
+    if tile.has_css_class(&class) {
+        return;
+    }
+    for c in tile.css_classes() {
+        if c.starts_with("section-swatch-") {
+            tile.remove_css_class(&c);
+        }
+    }
+    tile.add_css_class(&class);
+    if let Some(image) = tile.first_child().and_downcast::<gtk::Image>() {
+        image.set_icon_name(Some(icon));
+    }
+}
+
 /// Key caps joined with a dim "+".
 pub fn keycaps(keys: &[&str]) -> gtk::Box {
     let caps = hbox(4);
@@ -312,4 +376,18 @@ pub fn keycaps(keys: &[&str]) -> gtk::Box {
         caps.append(&label(k, "key-cap"));
     }
     caps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guesses_what_a_torrent_holds() {
+        assert_eq!(file_kind("debian-13.2.0-amd64-DVD-1.iso").1, "blue");
+        assert_eq!(file_kind("Nosferatu (1922) restored 1080p").1, "coral");
+        assert_eq!(file_kind("Pride and Prejudice, LibriVox audiobook").1, "teal");
+        assert_eq!(file_kind("archlinux-2026.11.01-x86_64").1, "blue");
+        assert_eq!(file_kind("some photos").1, "violet");
+    }
 }

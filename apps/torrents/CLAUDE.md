@@ -2,9 +2,13 @@
 
 - GTK4 (gtk4-rs 0.11) + Rust, no libadwaita. Nyx Design 2.0 (`use_design_2`, see
   `STYLE.md`): one surface, no hairlines; cards and spacing separate the parts. The
-  unified header (`chrome::app_header`) has the app with the filter or page as its
-  subtitle and the sidebar toggle; speeds, port, DHT and free space, the slow-mode chip,
-  search and Settings at the end. No status bar, no sidebar head. Numbers use tabular
+  unified header (`chrome::app_header`) has the app and the sidebar toggle, a
+  search-the-sites field in the middle (hidden on Search), and the speeds, the slow-mode
+  chip, Add and Settings at the end. No status bar, no sidebar head. The sidebar: Home and
+  Search, then Transfers (accent), Saved searches, Categories and Tags in their theme
+  sections; the icon rail shows a short bar in each group's colour. Home
+  (`sections/home.rs`) is the dashboard: speeds, shared, free space, a speed graph from
+  `live::speed_bars` (a day of ten-second averages), downloading, connection, finished. Numbers use tabular
   figures (`tnum`); mono is for links, paths and hashes. Pages have no title header. The settings pages
   (group `Settings` in `sections::all`) open in `settings_dialog.rs`, a card over the
   window with its own search over `widgets::SEARCH`; `navigate("speed")` etc. open it.

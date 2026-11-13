@@ -153,11 +153,11 @@ pub const STATUS_FILTERS: &[(&str, &str, &str)] = &[
     ("all", "All", "view-list-symbolic"),
     ("downloading", "Downloading", "go-down-symbolic"),
     ("seeding", "Seeding", "go-up-symbolic"),
-    ("completed", "Completed", "emblem-ok-symbolic"),
+    ("completed", "Finished", "emblem-ok-symbolic"),
     ("paused", "Paused", "media-playback-pause-symbolic"),
     ("active", "Active", "network-transmit-receive-symbolic"),
     ("inactive", "Inactive", "network-idle-symbolic"),
-    ("errored", "Errored", "dialog-warning-symbolic"),
+    ("errored", "Problems", "dialog-warning-symbolic"),
 ];
 
 impl Filter {

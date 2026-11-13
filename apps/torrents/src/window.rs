@@ -1,39 +1,50 @@
-//! The main window: the header (the app and where you are, the sidebar toggle; the
-//! overall speeds and connection, the slow-mode chip, search and settings at the end),
-//! the navigation sidebar (transfer filters with live counts, categories, tags, then
-//! Search) and a stack of pages built the first time they're shown. Every transfer
-//! filter shows the same Transfers page. The settings pages open in the settings
-//! dialog instead (see `settings_dialog`).
+//! The main window: the header (the app and the sidebar toggle; a search-the-sites
+//! field in the middle; the overall speeds, the slow-mode chip, Add and Settings at
+//! the end), the navigation sidebar (Home and Search, the transfer filters with live
+//! counts, saved searches, categories and tags) and a stack of pages built the first
+//! time they're shown. Every transfer filter shows the same Transfers page. The
+//! settings pages open in the settings dialog instead (see `settings_dialog`).
 
 use crate::model::{Filter, STATUS_FILTERS};
-use crate::sections::{self, Section, transfers};
+use crate::sections::{self, Section, home, transfers};
 use crate::widgets;
 use crate::{actions, fmt, live, prefs, settings_dialog, store, theme};
 use gtk::prelude::*;
-use nyx_ui::chrome;
 use gtk::{gdk, gio, glib};
+use nyx_ui::chrome;
+use nyx_ui::sidebar::{self, ACCENT_SECTION};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+
+/// The transfer filters the sidebar lists (the rest stay reachable with `--section`).
+const SIDEBAR_FILTERS: &[&str] = &["downloading", "seeding", "completed", "paused", "errored"];
+
+/// Category dots take these swatches in turn.
+const CATEGORY_SWATCHES: &[&str] = &["blue", "coral", "teal", "pink", "amber", "green", "violet", "red"];
+
+/// Where a saved search's nav id starts.
+const SAVED: &str = "saved:";
 
 struct Ui {
     app: gtk::Application,
     window: gtk::ApplicationWindow,
     stack: gtk::Stack,
-    /// Nav buttons by id: filter ids ("all", "cat:Movies"…) and page ids.
+    /// Nav buttons by id: page ids, filter ids ("downloading", "cat:Movies"…) and saved searches.
     nav_items: HashMap<String, gtk::Button>,
     nav_counts: HashMap<String, gtk::Label>,
-    categories_box: gtk::Box,
-    tags_box: gtk::Box,
+    /// Rows shown only while they have torrents (Uncategorized, Untagged).
+    only_when_used: HashMap<String, gtk::Button>,
+    lists_box: gtk::Box,
     pages: HashMap<&'static str, gtk::ScrolledWindow>,
     sections: Vec<Section>,
     current: String,
     overlay: gtk::Overlay,
-    compact_hide: Vec<gtk::Widget>,
     nav: gtk::Box,
-    header: chrome::AppHeader,
-    /// The speeds and connection, at the header's end.
-    readout: gtk::Label,
+    /// Hidden in a narrow window: the speeds, the slow chip's word, Add's key hint.
+    wide_only: Vec<gtk::Widget>,
+    /// The header's search-the-sites field (hidden on Search, which has its own).
+    find: gtk::Button,
 }
 
 thread_local! {
@@ -64,7 +75,7 @@ pub fn present(app: &gtk::Application, section: Option<&str>) {
     live::start();
     actions::install(app);
     build(app);
-    let start = section.map(String::from).unwrap_or_else(|| nyx_theme::start_page("all", &prefs::get().last_section));
+    let start = section.map(String::from).unwrap_or_else(|| nyx_theme::start_page("home", &prefs::get().last_section));
     navigate(&start);
     if let Some(ui) = ui() {
         ui.borrow().window.present();
@@ -89,45 +100,68 @@ fn install_icons() {
     }
 }
 
-fn nav_button(id: &str, title: &str, icon: &str, tooltip: &str, count: bool) -> (gtk::Button, Option<gtk::Label>, gtk::Label) {
+/// What a nav row starts with: an icon, or a dot in a swatch (categories).
+enum Lead<'a> {
+    Icon(&'a str),
+    Dot(&'a str),
+}
+
+fn nav_button(id: &str, title: &str, lead: Lead, tooltip: &str, count: bool) -> (gtk::Button, Option<gtk::Label>) {
     let button = gtk::Button::new();
     button.add_css_class("nav-item");
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    content.append(&gtk::Image::from_icon_name(icon));
+    match lead {
+        Lead::Icon(icon) => {
+            let image = gtk::Image::from_icon_name(icon);
+            image.add_css_class("nav-icon");
+            content.append(&image);
+        }
+        Lead::Dot(swatch) => {
+            let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            dot.add_css_class("nav-dot");
+            dot.add_css_class(&format!("section-swatch-{swatch}"));
+            dot.set_valign(gtk::Align::Center);
+            content.append(&dot);
+        }
+    }
     let l = widgets::label(title, "nav-label");
+    l.add_css_class("compact-hide");
     l.set_hexpand(true);
     l.set_ellipsize(gtk::pango::EllipsizeMode::End);
     content.append(&l);
     let readout = count.then(|| {
         let r = widgets::label("", "nav-readout");
         r.add_css_class("tnum");
+        r.add_css_class("compact-hide");
+        r.set_visible(false);
         content.append(&r);
         r
     });
     button.set_child(Some(&content));
     button.set_tooltip_text(Some(tooltip));
+    button.update_property(&[gtk::accessible::Property::Label(title)]);
     let id = id.to_string();
     button.connect_clicked(move |_| navigate(&id));
-    (button, readout, l)
+    (button, readout)
 }
 
-/// `section`: the app's accent for the first group, else its name in the theme's [sections.torrents].
-fn group_heading(title: &str, section: &str, add: Option<(&str, fn())>) -> (gtk::Box, gtk::Label) {
-    let row = widgets::hbox(4);
-    row.add_css_class("nav-group-row");
-    let g = widgets::label(&title.to_uppercase(), "nav-group");
-    g.set_hexpand(true);
-    row.append(&g);
-    nyx_ui::sidebar::set_section(&row, section);
-    if let Some((tip, f)) = add {
-        let b = gtk::Button::from_icon_name("list-add-symbolic");
-        b.add_css_class("flat");
-        b.add_css_class("nav-add");
-        b.set_tooltip_text(Some(tip));
-        b.connect_clicked(move |_| f());
-        row.append(&b);
-    }
-    (row, g)
+/// A group's heading in its section's colour, after the short bar the icon rail
+/// shows in its place. `section`: [`ACCENT_SECTION`] or a name in the theme's
+/// [sections.torrents].
+fn group_heading(list: &gtk::Box, title: &str, section: &str, add: Option<(&str, fn())>) {
+    let bar = gtk::Separator::new(gtk::Orientation::Horizontal);
+    bar.add_css_class("nav-divider");
+    bar.add_css_class("compact-show");
+    bar.add_css_class(&format!("section-{section}"));
+    bar.set_visible(COMPACT.with(|c| c.get()));
+    list.append(&bar);
+    let row = match add {
+        Some((tip, f)) => sidebar::group_label_with_add(title, false, tip, f),
+        None => sidebar::group_label(title, false),
+    };
+    sidebar::set_section(&row, section);
+    row.set_visible(!COMPACT.with(|c| c.get()));
+    list.append(&row);
 }
 
 fn build(app: &gtk::Application) {
@@ -145,51 +179,32 @@ fn build(app: &gtk::Application) {
     let nav = gtk::Box::new(gtk::Orientation::Vertical, 0);
     nav.add_css_class("settings-navigation");
     nav.set_hexpand(false);
-    let mut compact_hide: Vec<gtk::Widget> = Vec::new();
 
     let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let mut nav_items = HashMap::new();
     let mut nav_counts = HashMap::new();
 
-    // Transfers
-    let transfers_box = widgets::vbox(0);
-    let (h, g) = group_heading("Transfers", nyx_ui::sidebar::ACCENT_SECTION, None);
-    h.add_css_class("first");
-    compact_hide.push(g.clone().upcast());
-    transfers_box.append(&h);
-    for (id, title, icon) in STATUS_FILTERS {
-        let (b, count, label) = nav_button(id, title, icon, title, true);
-        if let Some(c) = count {
-            compact_hide.push(c.clone().upcast());
-            nav_counts.insert(id.to_string(), c);
-        }
-        compact_hide.push(label.upcast());
-        transfers_box.append(&b);
+    for (id, title, icon) in [("home", "Home", "go-home-symbolic"), ("search", "Search", "system-search-symbolic")] {
+        let (b, _) = nav_button(id, title, Lead::Icon(icon), title, false);
+        list.append(&b);
         nav_items.insert(id.to_string(), b);
     }
-    list.append(&transfers_box);
 
-    // Categories and tags are filled by `rebuild_lists`.
-    let categories_box = widgets::vbox(0);
-    list.append(&categories_box);
-    let tags_box = widgets::vbox(0);
-    list.append(&tags_box);
-
-    let mut last_group = "";
-    // The Transfers page has no nav item of its own: the filters above lead to it.
-    // Settings pages live in the settings dialog.
-    for s in sections.iter().filter(|s| !s.group.is_empty() && s.group != settings_dialog::GROUP) {
-        if s.group != last_group {
-            let (h, g) = group_heading(s.group, &s.group.to_lowercase(), None);
-            compact_hide.push(g.upcast());
-            list.append(&h);
-            last_group = s.group;
+    group_heading(&list, "Transfers", ACCENT_SECTION, None);
+    for id in SIDEBAR_FILTERS {
+        let Some((_, title, icon)) = STATUS_FILTERS.iter().find(|f| f.0 == *id) else { continue };
+        let (b, count) = nav_button(id, title, Lead::Icon(icon), title, true);
+        if let Some(c) = count {
+            nav_counts.insert(id.to_string(), c);
         }
-        let (b, _, label) = nav_button(s.id, s.title, s.icon, s.description, false);
-        compact_hide.push(label.upcast());
         list.append(&b);
-        nav_items.insert(s.id.to_string(), b);
+        nav_items.insert(id.to_string(), b);
     }
+
+    // Saved searches, categories and tags are filled by `rebuild_lists`.
+    let lists_box = widgets::vbox(0);
+    list.append(&lists_box);
+
     let nav_scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         // Scrolls with wheel, trackpad and keyboard; no visible scrollbar.
@@ -207,20 +222,66 @@ fn build(app: &gtk::Application) {
     stack.set_transition_duration(if prefs::get().reduce_motion { 0 } else { 160 });
 
     // ----- Header -----
-    // The app and where you are, the sidebar toggle; the speeds and connection, the
-    // slow-mode chip, search and Settings at the end.
     let header = chrome::app_header(&window, "torrents-magnet-symbolic", "Torrents");
     let collapse = widgets::bar_button("sidebar-show-symbolic", "Collapse the sidebar (Ctrl+B)");
     collapse.connect_clicked(|_| toggle_sidebar());
     header.start.append(&collapse);
+
+    let find = gtk::Button::new();
+    find.add_css_class("header-find");
+    let find_content = widgets::hbox(8);
+    find_content.append(&gtk::Image::from_icon_name("system-search-symbolic"));
+    let find_text = widgets::label("Search sites for torrents", "header-find-text");
+    find_text.set_hexpand(true);
+    find_text.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    find_content.append(&find_text);
+    let find_key = widgets::label("Ctrl K", "key-hint");
+    find_key.set_valign(gtk::Align::Center);
+    find_content.append(&find_key);
+    find.set_child(Some(&find_content));
+    // Its own width, not the header's middle: the label inside expands.
+    find.set_hexpand(false);
+    find.set_tooltip_text(Some("Search the sites for torrents (Ctrl+K)"));
+    find.connect_clicked(|_| open_search());
+    header.center.append(&find);
+
+    let mut wide_only: Vec<gtk::Widget> = Vec::new();
     header.end.set_spacing(4);
     let readout = header_readout();
+    wide_only.push(readout.clone().upcast());
     header.end.append(&readout);
-    header.end.append(&alt_speed_chip());
-    let search = widgets::bar_button("system-search-symbolic", "Filter the list (Ctrl+F)");
-    search.connect_clicked(|_| find());
-    header.end.append(&search);
+    let (chip, chip_label) = alt_speed_chip();
+    wide_only.push(chip_label.upcast());
+    header.end.append(&chip);
+    let add = gtk::Button::new();
+    add.add_css_class("header-add");
+    let add_content = widgets::hbox(6);
+    add_content.append(&gtk::Image::from_icon_name("list-add-symbolic"));
+    add_content.append(&gtk::Label::new(Some("Add")));
+    let add_key = widgets::label("Ctrl O", "key-hint");
+    add_key.set_valign(gtk::Align::Center);
+    wide_only.push(add_key.clone().upcast());
+    add_content.append(&add_key);
+    add.set_child(Some(&add_content));
+    add.set_tooltip_text(Some("Add a .torrent file (Ctrl+O); Ctrl+U adds a magnet link"));
+    add.connect_clicked(|_| actions::open_torrent_files());
+    header.end.append(&add);
     header.end.append(&chrome::settings_button(|| settings_dialog::open(None)));
+    // A tiled half-screen header shows the app's icon without its name.
+    fn find_class(w: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+        if w.has_css_class(class) {
+            return Some(w.clone());
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            if let Some(found) = find_class(&c, class) {
+                return Some(found);
+            }
+            child = c.next_sibling();
+        }
+        None
+    }
+    wide_only.extend(find_class(header.root.upcast_ref(), "app-title"));
 
     let frame = nyx_ui::frame::AppFrame::new(&header.root);
     frame.set_sidebar(&nav);
@@ -257,7 +318,11 @@ fn build(app: &gtk::Application) {
         }
         match key {
             gdk::Key::f if ctrl => {
-                find();
+                find_in_page();
+                glib::Propagation::Stop
+            }
+            gdk::Key::k if ctrl => {
+                open_search();
                 glib::Propagation::Stop
             }
             gdk::Key::F1 => {
@@ -330,7 +395,7 @@ fn build(app: &gtk::Application) {
         let nav = nav.clone();
         move |w: &gtk::ApplicationWindow| {
             let width = if w.width() > 0 { w.width() } else { w.default_width() };
-            let narrow = width > 0 && width < 980;
+            let narrow = width > 0 && width < sidebar::NARROW_WIDTH;
             settings_dialog::fit(w);
             if narrow == NARROW.with(|n| n.get()) && nav.has_css_class("sized") {
                 return;
@@ -373,16 +438,15 @@ fn build(app: &gtk::Application) {
         stack,
         nav_items,
         nav_counts,
-        categories_box,
-        tags_box,
+        only_when_used: HashMap::new(),
+        lists_box,
         pages: HashMap::new(),
         sections,
         current: String::new(),
         overlay,
-        compact_hide,
         nav: nav.clone(),
-        header,
-        readout,
+        wide_only,
+        find,
     };
     UI.with(|u| *u.borrow_mut() = Some(Rc::new(RefCell::new(ui))));
     rebuild_lists();
@@ -390,42 +454,31 @@ fn build(app: &gtk::Application) {
     live::on_update(update_counts);
 }
 
-fn free_space(path: &str) -> Option<u64> {
-    let mut p = crate::paths::expand(path);
-    while !p.exists() {
-        p = p.parent()?.to_path_buf();
-    }
-    let c = std::ffi::CString::new(p.to_string_lossy().as_bytes()).ok()?;
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    // SAFETY: `c` is a valid C string and `st` a properly sized out-parameter.
-    let ok = unsafe { libc::statvfs(c.as_ptr(), &mut st) } == 0;
-    ok.then(|| st.f_bavail as u64 * st.f_frsize as u64)
-}
-
 thread_local! {
     static ALT_CHIPS: RefCell<Vec<gtk::Button>> = const { RefCell::new(Vec::new()) };
 }
 
-/// The turtle chip: alternative speed limits on or off.
-fn alt_speed_chip() -> gtk::Button {
+/// The turtle chip: alternative speed limits on or off. Also gives back its word.
+fn alt_speed_chip() -> (gtk::Button, gtk::Label) {
     let b = gtk::Button::new();
     b.add_css_class("chip");
     b.add_css_class("alt-chip");
     let content = widgets::hbox(6);
     content.append(&gtk::Image::from_icon_name("torrents-turtle-symbolic"));
-    content.append(&widgets::label("Slow", ""));
+    let word = widgets::label("Slow", "");
+    content.append(&word);
     b.set_child(Some(&content));
     b.connect_clicked(|_| actions::toggle_alt_speed());
     ALT_CHIPS.with(|c| c.borrow_mut().push(b.clone()));
     refresh_alt_speed();
-    b
+    (b, word)
 }
 
 pub fn refresh_alt_speed() {
     let on = live::alt_active();
     let p = prefs::get();
     let tip = format!(
-        "Alternative speed limits ({} down, {} up){}",
+        "Slow mode: alternative speed limits ({} down, {} up){}",
         limit_text(p.alt_dl_limit),
         limit_text(p.alt_ul_limit),
         if p.schedule { ", on a schedule" } else { "" }
@@ -446,129 +499,189 @@ pub fn limit_text(kib: i32) -> String {
     if kib <= 0 { "unlimited".into() } else { fmt::rate(kib as f64 * 1024.0) }
 }
 
-/// Fill the Categories and Tags groups (after one is added or removed).
+/// Save what's in the search field, or ask for a search to keep.
+fn add_saved_search() {
+    let save = |q: String| {
+        prefs::update(|p| {
+            if !p.saved_searches.contains(&q) {
+                p.saved_searches.push(q);
+            }
+        });
+        rebuild_lists();
+    };
+    let q = sections::search::query();
+    if !q.is_empty() && !prefs::get().saved_searches.contains(&q) {
+        save(q);
+        return;
+    }
+    widgets::ask_text("Save a search", "It stays in the sidebar; click it to search the sites again.", &q, "Save", save);
+}
+
+/// Right-click a saved search: search again or remove it.
+fn attach_saved_menu(button: &gtk::Button, query: &str) {
+    let click = gtk::GestureClick::new();
+    click.set_button(gdk::BUTTON_SECONDARY);
+    let (b, q) = (button.clone(), query.to_string());
+    click.connect_pressed(move |_, _, x, y| {
+        let group = gio::SimpleActionGroup::new();
+        let menu = gio::Menu::new();
+        let again = gio::SimpleAction::new("again", None);
+        let q2 = q.clone();
+        again.connect_activate(move |_, _| navigate(&format!("{SAVED}{q2}")));
+        group.add_action(&again);
+        menu.append(Some("Search again"), Some("tr.again"));
+        let remove = gio::SimpleAction::new("forget", None);
+        let q2 = q.clone();
+        remove.connect_activate(move |_, _| {
+            let q3 = q2.clone();
+            prefs::update(move |p| p.saved_searches.retain(|s| *s != q3));
+            rebuild_lists();
+        });
+        group.add_action(&remove);
+        menu.append(Some("Remove"), Some("tr.forget"));
+        actions::popup(&b, x, y, &menu, &group);
+    });
+    button.add_controller(click);
+}
+
+/// Fill the Saved searches, Categories and Tags groups (after one is added or removed).
 fn rebuild_lists() {
     let Some(ui) = ui() else { return };
-    let (cbox, tbox) = {
-        let u = ui.borrow();
-        (u.categories_box.clone(), u.tags_box.clone())
-    };
-    for bx in [&cbox, &tbox] {
-        while let Some(c) = bx.first_child() {
-            bx.remove(&c);
-        }
+    let bx = ui.borrow().lists_box.clone();
+    while let Some(c) = bx.first_child() {
+        bx.remove(&c);
     }
     {
         let mut u = ui.borrow_mut();
-        u.nav_items.retain(|id, _| !id.starts_with("cat:") && !id.starts_with("tag:"));
+        u.nav_items.retain(|id, _| !id.starts_with("cat:") && !id.starts_with("tag:") && !id.starts_with(SAVED));
         u.nav_counts.retain(|id, _| !id.starts_with("cat:") && !id.starts_with("tag:"));
+        u.only_when_used.clear();
     }
-    let compact = COMPACT.with(|c| c.get());
-    let add = |bx: &gtk::Box, filter: Filter, icon: &str, menu: bool| {
+    let add = |filter: Filter, lead: Lead, menu: bool| {
         let id = filter.id();
         let title = filter.title();
-        let (b, count, label) = nav_button(&id, &title, icon, &title, true);
-        label.set_visible(!compact);
+        let (b, count) = nav_button(&id, &title, lead, &title, true);
         if menu {
             actions::attach_list_menu(&b, &filter);
         }
         bx.append(&b);
         let mut u = ui.borrow_mut();
         if let Some(c) = count {
-            c.set_visible(!compact);
-            u.compact_hide.push(c.clone().upcast());
             u.nav_counts.insert(id.clone(), c);
         }
-        u.compact_hide.push(label.upcast());
+        if !menu {
+            b.set_visible(false);
+            u.only_when_used.insert(id.clone(), b.clone());
+        }
         u.nav_items.insert(id, b);
     };
 
-    let (h, g) = group_heading("Categories", "categories", Some(("New category", || actions::edit_category_dialog(None))));
-    g.set_visible(!compact);
-    h.set_visible(!compact);
-    ui.borrow_mut().compact_hide.push(h.clone().upcast());
-    cbox.append(&h);
-    add(&cbox, Filter::Category(None), "folder-symbolic", false);
-    for name in store::categories().keys() {
-        add(&cbox, Filter::Category(Some(name.clone())), "folder-symbolic", true);
+    group_heading(&bx, "Saved searches", "discover", Some(("Save a search", add_saved_search)));
+    for q in prefs::get().saved_searches {
+        let id = format!("{SAVED}{q}");
+        let (b, _) =
+            nav_button(&id, &q, Lead::Icon("document-open-recent-symbolic"), &format!("Search the sites for “{q}”"), false);
+        attach_saved_menu(&b, &q);
+        bx.append(&b);
+        ui.borrow_mut().nav_items.insert(id, b);
     }
 
-    let (h, g) = group_heading("Tags", "tags", Some(("New tag", actions::new_tag_dialog)));
-    g.set_visible(!compact);
-    h.set_visible(!compact);
-    ui.borrow_mut().compact_hide.push(h.clone().upcast());
-    tbox.append(&h);
-    add(&tbox, Filter::Tag(None), "tag-symbolic", false);
+    group_heading(&bx, "Categories", "categories", Some(("New category", || actions::edit_category_dialog(None))));
+    for (i, name) in store::categories().keys().enumerate() {
+        add(Filter::Category(Some(name.clone())), Lead::Dot(CATEGORY_SWATCHES[i % CATEGORY_SWATCHES.len()]), true);
+    }
+    add(Filter::Category(None), Lead::Icon("folder-symbolic"), false);
+
+    group_heading(&bx, "Tags", "tags", Some(("New tag", actions::new_tag_dialog)));
     for name in store::tags() {
-        add(&tbox, Filter::Tag(Some(name.clone())), "tag-symbolic", true);
+        add(Filter::Tag(Some(name.clone())), Lead::Icon("tag-symbolic"), true);
     }
+    add(Filter::Tag(None), Lead::Icon("tag-symbolic"), false);
 
-    // Keep the highlight on the current filter (or fall back if it was removed).
+    // Keep the highlight on the current page (or fall back if it was removed).
     let current = ui.borrow().current.clone();
-    if Filter::from_id(&current).is_some() {
-        if ui.borrow().nav_items.contains_key(&current) {
-            mark_active(&current);
-        } else {
-            navigate("all");
-        }
+    if ui.borrow().nav_items.contains_key(&current) {
+        mark_active(&current);
+    } else if Filter::from_id(&current).is_some_and(|f| matches!(f, Filter::Category(Some(_)) | Filter::Tag(Some(_)))) {
+        navigate("home");
+    } else if current.starts_with(SAVED) {
+        navigate("search");
     }
     if let Some(u) = live::latest() {
         update_counts(&u);
     }
-    // New entries start expanded; centre their icons if the sidebar is icon-only.
-    if COMPACT.with(|c| c.get()) {
-        let nav = ui.borrow().nav.clone();
-        centre_icons(nav.upcast_ref(), true);
-    }
+    apply_compact(COMPACT.with(|c| c.get()));
 }
 
 fn update_counts(u: &crate::engine::Update) {
     let Some(ui) = ui() else { return };
     let counts: Vec<(String, gtk::Label)> = ui.borrow().nav_counts.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let used: Vec<(String, gtk::Button)> = ui.borrow().only_when_used.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let metas: Vec<(&crate::engine::Status, store::Meta)> = u.torrents.iter().map(|t| (t, store::meta(&t.id))).collect();
+    let count = |id: &str| Filter::from_id(id).map(|f| metas.iter().filter(|(s, m)| f.matches(s, m)).count()).unwrap_or(0);
+    let compact = COMPACT.with(|c| c.get());
     for (id, label) in counts {
-        let Some(f) = Filter::from_id(&id) else { continue };
-        let n = metas.iter().filter(|(s, m)| f.matches(s, m)).count();
-        label.set_text(&n.to_string());
+        let n = count(&id);
+        label.set_text(&if n > 0 { n.to_string() } else { String::new() });
+        label.set_visible(n > 0 && !compact);
+        if id == "errored" {
+            label.add_css_class("badge");
+        }
+    }
+    // Uncategorized and Untagged only mean something once there are categories or tags.
+    let has_categories = !store::categories().is_empty();
+    let has_tags = !store::tags().is_empty();
+    for (id, button) in used {
+        let named = if id.starts_with("cat:") { has_categories } else { has_tags };
+        button.set_visible(named && count(&id) > 0);
     }
 }
 
-/// Ctrl+F: filter the transfers list (going to it first if need be).
-fn find() {
-    if !is_transfers() && current() != "search" {
+/// Ctrl+K and the header's field: search the sites.
+pub fn open_search() {
+    if current() != "search" && !current().starts_with(SAVED) {
+        navigate("search");
+    }
+    sections::search::focus_query();
+}
+
+/// Ctrl+F: filter the transfers list (going to it first if need be), or on Search,
+/// go to the search field.
+fn find_in_page() {
+    if current() == "search" || current().starts_with(SAVED) {
+        sections::search::focus_query();
+        return;
+    }
+    if !is_transfers() {
         navigate("all");
     }
-    if current() == "search" {
-        sections::search::focus_query();
-    } else {
-        transfers::focus_search();
-    }
+    transfers::focus_search();
 }
 
-/// The overall speeds and the connection, kept current.
-fn header_readout() -> gtk::Label {
-    let readout = widgets::label("", "header-status");
-    readout.set_ellipsize(gtk::pango::EllipsizeMode::Start);
+/// The overall speeds, kept current.
+fn header_readout() -> gtk::Box {
+    let readout = widgets::hbox(6);
+    readout.add_css_class("header-rate");
+    readout.set_valign(gtk::Align::Center);
     readout.set_margin_end(6);
+    let down = widgets::label("", "tnum");
+    let up = widgets::label("", "tnum");
+    readout.append(&gtk::Image::from_icon_name("go-down-symbolic"));
+    readout.append(&down);
+    let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    gap.add_css_class("rate-gap");
+    readout.append(&gap);
+    readout.append(&gtk::Image::from_icon_name("go-up-symbolic"));
+    readout.append(&up);
     let r = readout.clone();
     live::on_tick(&readout, move |u| {
-        let mut parts = vec![
-            format!("↓ {}", fmt::net_rate(u.stats.dl_rate as f64)),
-            format!("↑ {}", fmt::net_rate(u.stats.ul_rate as f64)),
-            format!("Port {}", u.stats.listen_port),
-        ];
-        if prefs::get().dht {
-            parts.push(format!("DHT {}", u.stats.dht_nodes));
-        }
-        if let Some(free) = free_space(&prefs::get().save_path) {
-            parts.push(format!("{} free", fmt::bytes(free as f64)));
-        }
-        r.set_text(&parts.join(" · "));
-        r.set_tooltip_text(Some(if u.stats.has_incoming {
-            "Listening for incoming connections."
-        } else {
-            "Not listening: check the port and network interface in Connection."
-        }));
+        down.set_text(&fmt::net_rate(u.stats.dl_rate as f64));
+        up.set_text(&fmt::net_rate(u.stats.ul_rate as f64));
+        r.set_tooltip_text(Some(&format!(
+            "Downloading at {}, uploading at {}. Home has the connection's health.",
+            fmt::net_rate(u.stats.dl_rate as f64),
+            fmt::net_rate(u.stats.ul_rate as f64)
+        )));
     });
     readout
 }
@@ -577,6 +690,7 @@ fn header_readout() -> gtk::Label {
 pub const SHORTCUTS: &[(&[&str], &str)] = &[
     (&["Ctrl", "O"], "Add a .torrent file"),
     (&["Ctrl", "U"], "Add a magnet link"),
+    (&["Ctrl", "K"], "Search the sites for torrents"),
     (&["Ctrl", "F"], "Filter the list"),
     (&["Space"], "Pause or resume the selection"),
     (&["Delete"], "Remove the selection"),
@@ -632,40 +746,29 @@ fn set_narrow(narrow: bool) {
         mark_page(&page, narrow);
     }
     transfers::set_narrow(narrow);
-    // A tiled half-screen header has no room for the speeds.
-    ui.borrow().readout.set_visible(!narrow);
+    home::set_narrow(narrow);
+    for w in &ui.borrow().wide_only {
+        w.set_visible(!narrow);
+    }
 }
 
-/// The sidebar shows only icons: hide the labels, centre the icons and the toggle.
+/// The sidebar shows only icons: headings give way to short bars in their colour.
 fn apply_compact(compact: bool) {
     COMPACT.with(|c| c.set(compact));
     let Some(ui) = ui() else { return };
-    let (hide, nav) = {
-        let u = ui.borrow();
-        (u.compact_hide.clone(), u.nav.clone())
-    };
-    if compact {
-        nav.add_css_class("compact");
-    } else {
-        nav.remove_css_class("compact");
+    let nav = ui.borrow().nav.clone();
+    sidebar::set_compact(&nav, compact);
+    fn walk(w: &gtk::Widget, compact: bool) {
+        if w.has_css_class("compact-show") {
+            w.set_visible(compact);
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            walk(&c, compact);
+            child = c.next_sibling();
+        }
     }
-    for w in hide {
-        w.set_visible(!compact);
-    }
-    centre_icons(nav.upcast_ref(), compact);
-}
-
-fn centre_icons(w: &gtk::Widget, compact: bool) {
-    if w.has_css_class("nav-item")
-        && let Some(content) = w.downcast_ref::<gtk::Button>().and_then(|b| b.child())
-    {
-        content.set_halign(if compact { gtk::Align::Center } else { gtk::Align::Fill });
-    }
-    let mut child = w.first_child();
-    while let Some(c) = child {
-        centre_icons(&c, compact);
-        child = c.next_sibling();
-    }
+    walk(nav.upcast_ref(), compact);
 }
 
 pub fn toggle_sidebar() {
@@ -699,6 +802,9 @@ fn ensure_built(id: &'static str) {
     }
     build(&page);
     mark_page(&page.root, NARROW.with(|n| n.get()));
+    if sid == "home" {
+        home::set_narrow(NARROW.with(|n| n.get()));
+    }
     let stack = ui.borrow().stack.clone();
     stack.add_named(&page.root, Some(sid));
     ui.borrow_mut().pages.insert(sid, page.root);
@@ -730,11 +836,15 @@ pub fn navigate(id: &str) {
         }
     }
     let mut crumb = String::new();
+    let saved = id.strip_prefix(SAVED).map(String::from);
     let (page_id, nav_id): (&'static str, String) = if let Some(f) = Filter::from_id(id) {
         ensure_built("transfers");
         transfers::set_filter(f.clone());
         crumb = transfers::filter_title(&f);
         ("transfers", f.id())
+    } else if let Some(q) = &saved {
+        crumb = q.clone();
+        ("search", id.to_string())
     } else {
         let found = ui
             .borrow()
@@ -744,12 +854,7 @@ pub fn navigate(id: &str) {
             .map(|s| s.id);
         match found {
             Some(sid) => (sid, sid.to_string()),
-            None => {
-                ensure_built("transfers");
-                transfers::set_filter(Filter::All);
-                crumb = transfers::filter_title(&Filter::All);
-                ("transfers", "all".to_string())
-            }
+            None => ("home", "home".to_string()),
         }
     };
     ensure_built(page_id);
@@ -760,11 +865,16 @@ pub fn navigate(id: &str) {
             crumb = u.sections.iter().find(|s| s.id == page_id).map(|s| s.title.to_string()).unwrap_or_default();
         }
         chrome::set_title(&u.window, "Torrents", &crumb);
-        u.header.set_subtitle(&crumb);
         u.stack.set_visible_child_name(page_id);
+        u.find.set_visible(page_id != "search");
         u.current = nav_id.clone();
     }
-    prefs::update(|p| p.last_section = nav_id);
+    // A saved search runs now, but the app reopens on Search, not on a new search.
+    let last = if saved.is_some() { "search".to_string() } else { nav_id };
+    prefs::update(|p| p.last_section = last);
+    if let Some(q) = saved {
+        sections::search::run_query(&q);
+    }
 }
 
 /// Show a short message at the bottom of the window.

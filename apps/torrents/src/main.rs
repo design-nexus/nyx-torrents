@@ -27,8 +27,8 @@ const APP_ID: &str = "io.github.design_nexus.nyx.Torrents";
 
 const USAGE: &str = "Usage: nyx-torrents [--section ID] [--quit] [FILE.torrent | MAGNET | URL]...\n\
 \n\
-  --section ID   open (or switch the open window) to a page: all, downloading, seeding,\n\
-                 completed, paused, active, inactive, errored, cat:NAME, tag:NAME, search,\n\
+  --section ID   open (or switch the open window) to a page: home, search, all, downloading,\n\
+                 seeding, completed, paused, active, inactive, errored, cat:NAME, tag:NAME,\n\
                  downloads, connection, speed, bittorrent, appearance\n\
   --quit         stop the running instance (after saving its state)\n\
 \n\

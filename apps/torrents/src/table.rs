@@ -14,6 +14,8 @@ pub type Text<T> = fn(&T) -> String;
 pub type Compare<T> = fn(&T, &T) -> Ordering;
 /// Called with the row's key and the chosen option's index.
 pub type OnChoice = Rc<dyn Fn(&str, u32)>;
+/// Called with the row's key.
+pub type OnClick = Rc<dyn Fn(&str)>;
 
 pub struct Column<T> {
     pub title: &'static str,
@@ -24,6 +26,17 @@ pub struct Column<T> {
     pub compare: Option<Compare<T>>,
     /// A dropdown instead of text: (labels, value of row, on change(row key, choice index)).
     pub choice: Option<Choice<T>>,
+    /// Something before the text.
+    pub lead: Option<Lead<T>>,
+    /// An icon button instead of text: (icon, tooltip, on click). The column never hides.
+    pub button: Option<(&'static str, &'static str, OnClick)>,
+}
+
+pub enum Lead<T> {
+    /// The file tile for the name this gives (see `widgets::file_tile`).
+    Tile(Text<T>),
+    /// A small dot with the class this picks.
+    Dot(fn(&T) -> &'static str),
 }
 
 pub struct Choice<T> {
@@ -34,10 +47,17 @@ pub struct Choice<T> {
 
 impl<T> Column<T> {
     pub fn text(title: &'static str, width: i32, text: Text<T>) -> Self {
-        Column { title, width, numeric: false, text, compare: None, choice: None }
+        Column { title, width, numeric: false, text, compare: None, choice: None, lead: None, button: None }
     }
     pub fn num(title: &'static str, width: i32, text: Text<T>, compare: Compare<T>) -> Self {
-        Column { title, width, numeric: true, text, compare: Some(compare), choice: None }
+        Column { title, width, numeric: true, text, compare: Some(compare), choice: None, lead: None, button: None }
+    }
+    pub fn button(width: i32, icon: &'static str, tooltip: &'static str, on_click: OnClick) -> Self {
+        Column { button: Some((icon, tooltip, on_click)), ..Column::text("", width, |_| String::new()) }
+    }
+    pub fn lead(mut self, lead: Lead<T>) -> Self {
+        self.lead = Some(lead);
+        self
     }
     pub fn sorted(mut self, compare: Compare<T>) -> Self {
         self.compare = Some(compare);
@@ -63,6 +83,8 @@ pub struct Table<T: 'static> {
     columns: Rc<Vec<Column<T>>>,
     empty: gtk::Stack,
     empty_label: gtk::Label,
+    /// Room the expanding column keeps before columns at the right start to hide.
+    room: Rc<std::cell::Cell<i32>>,
 }
 
 fn key(w: &gtk::Widget) -> usize {
@@ -85,7 +107,29 @@ fn render<T: 'static>(columns: &[Column<T>], obj: &Obj, col: usize, w: &gtk::Wid
         }
         return;
     }
-    if let Some(l) = w.downcast_ref::<gtk::Label>() {
+    if c.button.is_some() {
+        unsafe { w.set_data("row-key", item.key.clone()) };
+        return;
+    }
+    let label = match &c.lead {
+        Some(lead) => {
+            let Some(first) = w.first_child() else { return };
+            match lead {
+                Lead::Tile(name) => widgets::set_file_tile(&first, &name(&item.value)),
+                Lead::Dot(class) => {
+                    for old in first.css_classes() {
+                        if old != "cell-dot" {
+                            first.remove_css_class(&old);
+                        }
+                    }
+                    first.add_css_class(class(&item.value));
+                }
+            }
+            w.last_child()
+        }
+        None => Some(w.clone()),
+    };
+    if let Some(l) = label.and_downcast_ref::<gtk::Label>() {
         let text = (c.text)(&item.value);
         if l.text() != text {
             l.set_text(&text);
@@ -108,11 +152,14 @@ impl<T: 'static> Table<T> {
         view.set_hexpand(true);
         view.set_vexpand(true);
         view.add_css_class("details-table");
-        let mut fit: Vec<(gtk::ColumnViewColumn, i32)> = Vec::new();
+        // (column, width, never hides)
+        let mut fit: Vec<(gtk::ColumnViewColumn, i32, bool)> = Vec::new();
         for (i, c) in columns.iter().enumerate() {
             let factory = gtk::SignalListItemFactory::new();
             let numeric = c.numeric;
             let choice_labels = c.choice.as_ref().map(|ch| (ch.labels, ch.on_change.clone()));
+            let button = c.button.as_ref().map(|(icon, tip, f)| (*icon, *tip, f.clone()));
+            let lead = c.lead.as_ref().map(|l| matches!(l, Lead::Tile(_)));
             factory.connect_setup(move |_, item| {
                 let item = item.downcast_ref::<gtk::ListItem>().expect("list item");
                 let w: gtk::Widget = if let Some((labels, on_change)) = &choice_labels {
@@ -129,6 +176,17 @@ impl<T: 'static> Table<T> {
                         }
                     });
                     dd.upcast()
+                } else if let Some((icon, tip, on_click)) = &button {
+                    let b = widgets::icon_button(icon, tip);
+                    b.add_css_class("cell-button");
+                    b.set_halign(gtk::Align::End);
+                    let on_click = on_click.clone();
+                    b.connect_clicked(move |b| {
+                        if let Some(k) = unsafe { b.data::<String>("row-key").map(|p| p.as_ref().clone()) } {
+                            on_click(&k);
+                        }
+                    });
+                    b.upcast()
                 } else {
                     let l = gtk::Label::new(None);
                     l.set_ellipsize(pango::EllipsizeMode::End);
@@ -138,7 +196,27 @@ impl<T: 'static> Table<T> {
                     } else {
                         l.set_xalign(0.0);
                     }
-                    l.upcast()
+                    match lead {
+                        Some(tile) => {
+                            let b = widgets::hbox(if tile { 10 } else { 8 });
+                            if tile {
+                                b.append(&widgets::file_tile(""));
+                            } else {
+                                let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                                dot.add_css_class("cell-dot");
+                                dot.set_valign(gtk::Align::Center);
+                                b.append(&dot);
+                            }
+                            // A dot sits right beside its number.
+                            l.set_hexpand(tile);
+                            if !tile {
+                                b.set_halign(gtk::Align::End);
+                            }
+                            b.append(&l);
+                            b.upcast()
+                        }
+                        None => l.upcast(),
+                    }
                 };
                 item.set_child(Some(&w));
             });
@@ -172,19 +250,21 @@ impl<T: 'static> Table<T> {
                 })));
             }
             view.append_column(&col);
-            fit.push((col, c.width));
+            fit.push((col, c.width, c.width == 0 || c.button.is_some()));
         }
         // When the table narrows, hide columns from the right (the expanding one stays).
         // Measure the scrolled window around it: the view itself never gets narrower
         // than its columns.
         let fitted = std::cell::Cell::new(0);
+        let room = Rc::new(std::cell::Cell::new(200));
+        let r = room.clone();
         view.add_tick_callback(move |view, _| {
             let width = view.parent().map(|p| p.width()).unwrap_or(0);
             if width > 0 && width != fitted.get() {
                 fitted.set(width);
-                let mut used: i32 = 200 + fit.iter().map(|(_, w)| *w).sum::<i32>();
-                for (col, w) in fit.iter().rev() {
-                    let show = *w == 0 || used <= width;
+                let mut used: i32 = r.get() + fit.iter().map(|(_, w, _)| *w).sum::<i32>();
+                for (col, w, keep) in fit.iter().rev() {
+                    let show = *keep || used <= width;
                     if !show {
                         used -= w;
                     }
@@ -215,7 +295,11 @@ impl<T: 'static> Table<T> {
         let root = widgets::vbox(0);
         root.append(&empty);
         root.set_vexpand(true);
-        Table { root, view, store, sorter, by_key: RefCell::new(HashMap::new()), bound, columns, empty, empty_label }
+        Table { root, view, store, sorter, by_key: RefCell::new(HashMap::new()), bound, columns, empty, empty_label, room }
+    }
+
+    pub fn set_room(&self, px: i32) {
+        self.room.set(px);
     }
 
     pub fn set_empty_text(&self, text: &str) {

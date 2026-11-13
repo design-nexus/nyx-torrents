@@ -189,6 +189,8 @@ fn build_tables() -> (Table<Tracker>, Table<Peer>, Table<(usize, FileEntry)>) {
                     },
                     on_change,
                 }),
+                lead: None,
+                button: None,
             },
         ],
         "The file list appears once the torrent's metadata arrives.",

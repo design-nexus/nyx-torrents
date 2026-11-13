@@ -101,6 +101,12 @@ pub struct Prefs {
     // ----- Search -----
     pub disabled_engines: Vec<String>,
     pub search_category: String,
+    /// Queries kept in the sidebar, newest last.
+    pub saved_searches: Vec<String>,
+
+    // ----- Home -----
+    /// How far back Home's speed graph reaches: 5min, hour or today.
+    pub home_span: String,
 }
 
 impl Default for Prefs {
@@ -112,7 +118,7 @@ impl Default for Prefs {
             reduce_motion: false,
             sidebar_collapsed: false,
             glow: true,
-            last_section: "all".into(),
+            last_section: "home".into(),
             hidden_columns: vec!["added".into(), "tags".into(), "availability".into()],
             details_height: 280,
             details_tab: "general".into(),
@@ -177,6 +183,9 @@ impl Default for Prefs {
 
             disabled_engines: Vec::new(),
             search_category: "all".into(),
+            saved_searches: Vec::new(),
+
+            home_span: "hour".into(),
         }
     }
 }

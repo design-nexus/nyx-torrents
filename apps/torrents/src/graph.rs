@@ -53,7 +53,7 @@ pub enum Scale {
     Auto { floor: f64 },
 }
 
-fn nice_ceiling(v: f64) -> f64 {
+pub fn nice_ceiling(v: f64) -> f64 {
     if v <= 0.0 {
         return 1.0;
     }
