@@ -49,6 +49,8 @@ pub struct Prefs {
     // ----- Connection -----
     pub port: u16,
     pub upnp: bool,
+    /// The one-time notice that UPnP is on has been shown.
+    pub upnp_told: bool,
     /// Network interface to bind to ("" for any), e.g. a VPN's `wg0`.
     pub interface: String,
     /// both, tcp or utp.
@@ -142,6 +144,7 @@ impl Default for Prefs {
 
             port: 0,
             upnp: true,
+            upnp_told: false,
             interface: String::new(),
             protocol: "both".into(),
             max_connections: 500,

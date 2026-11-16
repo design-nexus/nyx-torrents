@@ -80,6 +80,26 @@ pub fn present(app: &gtk::Application, section: Option<&str>) {
     if let Some(ui) = ui() {
         ui.borrow().window.present();
     }
+    tell_about_upnp();
+}
+
+/// Once: UPnP is on by default and opens the port on the router without asking, so say
+/// so, and where to turn it off.
+fn tell_about_upnp() {
+    let p = prefs::get();
+    if !p.upnp || p.upnp_told {
+        return;
+    }
+    prefs::update(|p| p.upnp_told = true);
+    let port = p.port;
+    glib::timeout_add_local_once(std::time::Duration::from_millis(1200), move || {
+        toast_for(
+            &format!(
+                "Torrents asks your router to open port {port} for other peers (UPnP). Turn that off in Settings › Connection."
+            ),
+            9000,
+        );
+    });
 }
 
 /// Our own symbolic icons (the icon theme may lack a turtle or a magnet).
@@ -879,6 +899,11 @@ pub fn navigate(id: &str) {
 
 /// Show a short message at the bottom of the window.
 pub fn toast(message: &str) {
+    toast_for(message, 3500);
+}
+
+/// A message at the bottom of the window for `ms` milliseconds.
+fn toast_for(message: &str, ms: u64) {
     let Some(ui) = ui() else {
         eprintln!("nyx-torrents: {message}");
         return;
@@ -894,7 +919,7 @@ pub fn toast(message: &str) {
     bx.set_valign(gtk::Align::End);
     bx.set_can_target(false);
     overlay.add_overlay(&bx);
-    glib::timeout_add_local_once(std::time::Duration::from_millis(3500), move || {
+    glib::timeout_add_local_once(std::time::Duration::from_millis(ms), move || {
         overlay.remove_overlay(&bx);
     });
 }

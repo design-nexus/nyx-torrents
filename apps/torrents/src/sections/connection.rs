@@ -43,6 +43,9 @@ pub fn build(page: &Page) {
         |on| set(|p| p.upnp = on),
     );
     g.add(&r);
+    if firewall::managed() {
+        g.add(&firewall::row(p.port));
+    }
     g.add(&widgets::segmented_row(
         "Protocols",
         "µTP is gentler on your connection; plain TCP reaches some older clients.",
@@ -137,4 +140,131 @@ pub fn build(page: &Page) {
     );
     g.add(&r);
     g.add(&details);
+}
+
+/// NyxOS's firewall drops incoming connections unless a port is allowed in the system's
+/// overrides (`nyx-system apply`, which asks for an administrator and updates the system).
+/// Downloads work without it; allowing the port lets other peers reach this one.
+mod firewall {
+    use crate::widgets;
+    use gtk::{gio, glib, prelude::*};
+
+    const OVERRIDES: &str = "/etc/nyxos/overrides/system.json";
+
+    /// On NyxOS, with its System Manager to ask.
+    pub fn managed() -> bool {
+        std::path::Path::new(OVERRIDES).parent().is_some_and(|d| d.is_dir())
+            && std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|d| d.join("nyx-system").is_file()))
+    }
+
+    /// Whether the overrides allow `port` in for both TCP and UDP.
+    pub fn allows(overrides: &serde_json::Value, port: u16) -> bool {
+        let has = |proto: &str| {
+            overrides["firewall"][proto].as_array().is_some_and(|ports| ports.iter().any(|p| p.as_u64() == Some(port as u64)))
+        };
+        has("tcp") && has("udp")
+    }
+
+    /// The System Manager's changes that open or close `port` for TCP and UDP.
+    pub fn changes(port: u16, open: bool) -> String {
+        let one =
+            |protocol: &str| serde_json::json!({"change": "firewall-port", "port": port, "protocol": protocol, "open": open});
+        serde_json::Value::Array(vec![one("tcp"), one("udp")]).to_string()
+    }
+
+    fn allowed_now(port: u16) -> bool {
+        std::fs::read_to_string(OVERRIDES)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .is_some_and(|v| allows(&v, port))
+    }
+
+    fn describe(port: u16, open: bool) -> String {
+        if open {
+            format!("NyxOS's firewall lets other peers reach port {port}.")
+        } else {
+            format!(
+                "NyxOS's firewall turns away peers connecting to port {port}; downloads still work. Allowing it asks for an administrator and updates the system."
+            )
+        }
+    }
+
+    pub fn row(port: u16) -> gtk::Box {
+        let open = allowed_now(port);
+        let switch = gtk::Switch::new();
+        switch.set_active(open);
+        switch.set_valign(gtk::Align::Center);
+        let row = widgets::row("Allow incoming connections", &describe(port, open), Some(switch.upcast_ref()));
+        let desc = row_description(&row);
+        switch.connect_state_set(move |switch, want| {
+            if want == allowed_now(port) {
+                return glib::Propagation::Proceed;
+            }
+            switch.set_sensitive(false);
+            if let Some(d) = &desc {
+                d.set_text("Updating the system…");
+            }
+            let json = changes(port, want);
+            let args = ["nyx-system", "apply", json.as_str()].map(std::ffi::OsStr::new);
+            let (switch, desc) = (switch.clone(), desc.clone());
+            match gio::Subprocess::newv(&args, gio::SubprocessFlags::NONE) {
+                Ok(child) => child.wait_check_async(None::<&gio::Cancellable>, move |result| {
+                    let now = allowed_now(port);
+                    if let Err(e) = result {
+                        crate::window::toast(&format!("The firewall wasn't changed: {}", e.message()));
+                    }
+                    switch.set_active(now);
+                    switch.set_state(now);
+                    switch.set_sensitive(true);
+                    if let Some(d) = &desc {
+                        d.set_text(&describe(port, now));
+                    }
+                }),
+                Err(e) => {
+                    crate::window::toast(&format!("The System Manager couldn't be asked: {}", e.message()));
+                    switch.set_sensitive(true);
+                    return glib::Propagation::Stop;
+                }
+            }
+            glib::Propagation::Stop
+        });
+        row
+    }
+
+    /// The row's description label (the second label in its text column).
+    fn row_description(row: &gtk::Box) -> Option<gtk::Label> {
+        let mut labels = Vec::new();
+        let mut stack = vec![row.clone().upcast::<gtk::Widget>()];
+        while let Some(w) = stack.pop() {
+            if let Ok(l) = w.clone().downcast::<gtk::Label>() {
+                labels.push(l);
+            }
+            let mut child = w.last_child();
+            while let Some(c) = child {
+                stack.push(c.clone());
+                child = c.prev_sibling();
+            }
+        }
+        labels.into_iter().nth(1)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn both_protocols_must_be_open() {
+            let v = serde_json::json!({"firewall": {"tcp": [22, 51413], "udp": [51413]}});
+            assert!(allows(&v, 51413));
+            assert!(!allows(&v, 22));
+            assert!(!allows(&serde_json::json!({}), 51413));
+        }
+
+        #[test]
+        fn changes_are_the_system_managers() {
+            let v: serde_json::Value = serde_json::from_str(&changes(51413, true)).unwrap();
+            assert_eq!(v[0], serde_json::json!({"change": "firewall-port", "port": 51413, "protocol": "tcp", "open": true}));
+            assert_eq!(v[1]["protocol"], "udp");
+        }
+    }
 }
