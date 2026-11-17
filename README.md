@@ -34,7 +34,7 @@ system theme and fits a half-screen tile.
 
 ## Install
 
-On NyxOS, install Torrents from the Store. On Omarchy:
+On NyxOS, choose Torrents in Welcome when you set up, or install it later from the Store or with `nyx install nyx-torrents`. On Omarchy:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/design-nexus/nyx-torrents/main/install.sh | bash -s -- torrents
