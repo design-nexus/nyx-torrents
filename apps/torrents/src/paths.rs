@@ -52,4 +52,3 @@ pub fn downloads() -> PathBuf {
     }
     home().join("Downloads")
 }
-

@@ -2,10 +2,30 @@
 //! what's downloading, add a magnet or .torrent link, pause or resume one. Nothing is
 //! removed; adding goes through the usual add dialog when that's switched on.
 
-use crate::engine::{ffi::Status, Command};
+use crate::engine::{Command, ffi::Status};
 use crate::{actions, live, model};
 use nyx_core::control::text;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+
+/// Torrents' description for the control interface (API 2): its actions, the `nyx`
+/// command's `torrents` namespace, and D-Bus activation so a call starts it (with its window,
+/// which holds what the actions work on).
+pub fn description(app_id: &str) -> Value {
+    let mut tools = tools();
+    for t in tools.as_array_mut().into_iter().flatten() {
+        let risk = match t["name"].as_str().unwrap_or_default() {
+            "torrents.list" => "read_only",
+            "torrents.add" => "external",
+            _ => "writes",
+        };
+        t["x-nyx"] = json!({"risk": risk});
+    }
+    json!({
+        "tools": tools,
+        "nyx": {"api": 2, "app": app_id, "name": "Torrents", "icon": "io.github.design_nexus.nyx.Torrents", "namespaces": ["torrents"],
+                "aliases": [], "bus_name": app_id, "activation": "dbus", "default": "torrents.list"}
+    })
+}
 
 pub fn tools() -> Value {
     json!([

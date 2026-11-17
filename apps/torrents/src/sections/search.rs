@@ -352,11 +352,15 @@ fn install_from_file() {
 }
 
 /// Said wherever a plugin can be installed: a plugin is a program, not a list of sites.
-const WARNING: &str = "A plugin is a program: every search runs it with access to all your files. Install only plugins you trust.";
+const WARNING: &str =
+    "A plugin is a program: every search runs it with access to all your files. Install only plugins you trust.";
 
 fn install_from_url() {
     let (dialog, card) = widgets::dialog("Install from a link", 520);
-    card.append(&widgets::label("A secure (https) link to a plugin's .py file, like the ones on qBittorrent's plugin wiki.", "dim"));
+    card.append(&widgets::label(
+        "A secure (https) link to a plugin's .py file, like the ones on qBittorrent's plugin wiki.",
+        "dim",
+    ));
     card.append(&widgets::label(WARNING, "dim"));
     let entry = gtk::Entry::new();
     entry.add_css_class("mono");
@@ -392,7 +396,19 @@ fn install_from_url() {
         }
         let tmp = dir.join(name);
         let tmp2 = tmp.clone();
-        let args = ["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "30", "-o", &tmp.to_string_lossy(), &url];
+        let args = [
+            "curl",
+            "-fsSL",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--max-time",
+            "30",
+            "-o",
+            &tmp.to_string_lossy(),
+            &url,
+        ];
         cmd::run_async(&args, move |res| {
             match res.map_err(|e| e.to_string()).and_then(|_| search::install_file(&tmp2)) {
                 Ok(id) => {
@@ -513,8 +529,10 @@ pub fn build(page: &Page) {
     let banner = widgets::banner(
         if search::python() {
             "No search sites yet. Import the plugins qBittorrent has, or install one from a file or link."
-        } else {
+        } else if std::path::Path::new("/usr/bin/pacman").exists() {
             "Search sites need <b>python3</b>, which isn't installed. Install it with <tt>sudo pacman -S python</tt>."
+        } else {
+            "Search sites need <b>python3</b>, which isn't installed. It's in the Store."
         },
         !search::python(),
     );

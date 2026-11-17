@@ -455,10 +455,8 @@ fn refresh_cells(st_rc: &Rc<RefCell<State>>) {
 fn sync_details(st_rc: &Rc<RefCell<State>>) {
     let sel = st_rc.borrow().selection.clone();
     let bits = sel.selection();
-    let first = (bits.size() > 0)
-        .then(|| sel.item(bits.nth(0)).and_downcast::<TorrentObject>())
-        .flatten()
-        .map(|o| o.row().s.id.clone());
+    let first =
+        (bits.size() > 0).then(|| sel.item(bits.nth(0)).and_downcast::<TorrentObject>()).flatten().map(|o| o.row().s.id.clone());
     if st_rc.borrow().selected_id != first {
         st_rc.borrow_mut().selected_id = first.clone();
         details::show(first);

@@ -1,7 +1,7 @@
 # Torrents
 
-A BitTorrent client for [Omarchy](https://omarchy.org). It takes its colors from
-your Omarchy theme and fits a half-screen tile.
+A BitTorrent client for NyxOS and [Omarchy](https://omarchy.org). It follows the
+system theme and fits a half-screen tile.
 
 ## Features
 
@@ -33,6 +33,8 @@ your Omarchy theme and fits a half-screen tile.
   stop whenever the VPN is down.
 
 ## Install
+
+On NyxOS, install Torrents from the Store. On Omarchy:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/design-nexus/nyx-torrents/main/install.sh | bash -s -- torrents
