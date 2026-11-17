@@ -66,11 +66,23 @@ fn main() -> glib::ExitCode {
     let described = control::description(&app.application_id().map(|s| s.to_string()).unwrap_or_default());
     app.connect_startup(move |app| {
         let handle_app = app.clone();
-        nyx_core::control::serve(app, described.clone(), move |name, args| {
+        nyx_core::control::serve_async(app, described.clone(), move |name, args, reply| {
             if handle_app.active_window().is_none() {
                 window::present(&handle_app, None);
             }
-            control::handle(name, args)
+            // Just opened for this call: the engine reports its torrents a moment later.
+            let (name, tries) = (name.to_string(), std::cell::Cell::new(0));
+            let pending = std::cell::RefCell::new(Some((args, reply)));
+            glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+                tries.set(tries.get() + 1);
+                if control::starting() && tries.get() < 100 {
+                    return glib::ControlFlow::Continue;
+                }
+                if let Some((args, reply)) = pending.borrow_mut().take() {
+                    reply(control::handle(&name, args));
+                }
+                glib::ControlFlow::Break
+            });
         })
     });
     app.connect_command_line(|app, cl| {

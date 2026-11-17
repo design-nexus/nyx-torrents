@@ -40,6 +40,11 @@ pub fn tools() -> Value {
     ])
 }
 
+/// The engine hasn't reported yet (Torrents was just opened).
+pub fn starting() -> bool {
+    live::latest().is_none()
+}
+
 fn torrents() -> Result<Vec<Status>, String> {
     live::latest().map(|u| u.torrents.clone()).ok_or_else(|| "Torrents is still starting; try again in a moment".into())
 }
